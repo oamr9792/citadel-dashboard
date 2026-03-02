@@ -7,7 +7,7 @@ export async function onRequestPost(context) {
 
   let body;
   try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
-  const { clientId, clientName, type, keywords, sheetUrl, previousReportId } = body;
+  const { clientId, clientName, type, keywords, sheetUrl, previousReportId, linkedReports } = body;
   if (!clientId || !clientName || !type) return json({ error: "Missing required fields" }, 400);
 
   try {
@@ -25,6 +25,18 @@ export async function onRequestPost(context) {
     }
     if (type === "social" || type === "executive") {
       dataPayload += `\n=== SOCIAL MEDIA ANALYSIS REQUEST ===\nClient: ${clientName}\nKeywords: ${keywords || "N/A"}\nAnalyze social media presence and sentiment for this client.\n`;
+    }
+    
+    // Add linked report URLs for executive summary
+    if (type === "executive" && linkedReports) {
+      const baseUrl = new URL(request.url).origin;
+      let links = "\n=== LINKED REPORTS ===\n";
+      links += "The following individual reports have been generated for this client. Include clickable links to each in the relevant section of the executive summary.\n";
+      if (linkedReports.serp) links += `SERP Report URL: ${baseUrl}/share/${linkedReports.serp.shareToken}\n`;
+      if (linkedReports.llm) links += `LLM Report URL: ${baseUrl}/share/${linkedReports.llm.shareToken}\n`;
+      if (linkedReports.social) links += `Social Media Report URL: ${baseUrl}/share/${linkedReports.social.shareToken}\n`;
+      links += "For each section (SERP Snapshot, LLM Snapshot, Social Media Snapshot), add a styled link/button that says 'View Full Report →' linking to the corresponding URL above.\n";
+      dataPayload += links;
     }
     if (previousReportId) {
       try { const p = await env.CITADEL_KV.get(`report-html:${previousReportId}`); if (p) dataPayload += `\n=== PREVIOUS REPORT ===\n${p.substring(0, 20000)}\n`; } catch {}
@@ -321,7 +333,7 @@ Required Sections (in order):
 6. Owned Content Performance - Table of all ★ Owned URLs ranked. Below: "Content Created but Not Ranking" list.
 7. Negative Exposure Analysis - Table with: Rank | Movement | Title | URL | Domain | Category (Legal/Regulatory, News/Media, Complaint Site, Forum/Social, Other). Movement colored: green for ↓ (negative dropping), red for ↑ (negative rising).
 8. Unowned Positive Results (allies) - Third-party pages helping reputation.
-9. Key Observations & Recommendations - Numbered professional observations with actionable next steps.
+9. Action Items - Brief, numbered list of specific actions the Reputation Citadel team will focus on for the client based on this report's findings. Frame as "what we will do next" not "what you should do". Use first-person plural ("We will...", "Our team will...", "Our next steps include..."). Keep it concise — 4-6 bullet points maximum. Examples: "We will prioritize suppression of the Daily Mail article through targeted content publishing", "Our team will optimize the existing owned content at [URL] to improve its ranking from position X".
 10. Footer - "Reputation Citadel · SERP & Online Reputation Report · Generated [DATE]" + "CONFIDENTIAL — PREPARED FOR CLIENT USE ONLY" in red uppercase.
 
 Styling:
@@ -396,7 +408,7 @@ Required Sections:
 9. Platform Breakdown — grid2 cards per platform
 10. Notable Quotes — styled blockquotes
 11. Legal Landscape — table with status tags
-12. Key Observations — numbered professional observations
+12. Action Items — Brief, numbered list of specific actions the Reputation Citadel team will focus on for the client. Frame as "what we will do next" using first-person plural ("We will...", "Our team will..."). Keep concise — 4-6 items maximum.
 13. Footer — "Reputation Citadel · Social Media Intelligence Report · Generated [DATE]" + "CONFIDENTIAL" in red uppercase
 
 Styling: .card, .stat, .grid2, .grid3, .tag, .tag-red, .tag-amber, .tag-green, .tag-blue, .timeline-item, .quote, .risk-meter classes.
@@ -474,7 +486,7 @@ Sections:
 6. Fan-Out Query Analysis — complete list, categorized, dangerous in red, opportunities in green.
 7. Source & Ownership Analysis — table: Domain, URL, Frequency, Owned Y/N, Sentiment. Plus "Sources Not Yet Cited".
 8. Negative Content Propagation Map — which sources feed which LLMs, prominence, cross-platform propagation score.
-9. Key Observations & Recommendations — platform-specific recs, content priorities, source authority, mitigation strategies.
+9. Action Items — Brief, numbered list of specific actions the Reputation Citadel team will focus on for the client based on this report. Frame as "what we will do next" using first-person plural ("We will...", "Our team will..."). Keep concise — 4-6 items. Focus on platform-specific actions, content creation priorities, and negative content mitigation steps we will take.
 10. Footer — "Reputation Citadel · LLM Reputation Intelligence Report · Generated [DATE]" + platforms + "CONFIDENTIAL" in red.
 
 Styling: .card, .stat, .grid2, .grid3, .tag system. Platform color coding with CSS variables.
@@ -493,12 +505,17 @@ Synthesize findings across SERP analysis, social media intelligence, and LLM rep
 TONE: Client-facing, encouraging, professional. "Mr./Ms. [Last Name]".
 
 HTML FORMAT:
-:root { --bg:#ffffff; --card:#f0f3f8; --navy:#1b2a4a; --red:#c0392b; --green:#1e8449; --text:#1e293b; --header-bg:#000000; }
+:root { --bg:#ffffff; --card:#f0f3f8; --navy:#1b2a4a; --red:#c0392b; --green:#1e8449; --amber:#d4880f; --text:#1e293b; --muted:#5a6a85; --header-bg:#000000; --owned-gold:#b8860b; }
 Georgia headings, 'Segoe UI' body.
 
 Header: Black background. ${logoInstruction}. "Executive Summary Report" in white Georgia.
 
-Sections: Executive Overview, SERP Snapshot, Social Media Snapshot, AI/LLM Reputation Snapshot, Combined Risk Assessment, Strategic Recommendations, Footer with confidential notice.
+Sections: Executive Overview, SERP Snapshot, Social Media Snapshot, AI/LLM Reputation Snapshot, Combined Risk Assessment, Action Items (brief list of what our team will focus on next, using "We will..." framing), Footer with confidential notice.
+
+IMPORTANT — LINKED REPORTS:
+If report URLs are provided in the data, each snapshot section (SERP, LLM, Social Media) MUST include a styled "View Full Report →" link at the bottom of that section. Style the link as:
+<a href="URL" target="_blank" style="display:inline-block;margin-top:16px;padding:10px 24px;background:var(--navy);color:#fff;text-decoration:none;border-radius:6px;font-family:'Segoe UI',sans-serif;font-size:0.9rem">View Full SERP Report →</a>
+(Adjust the label for each report type.) This allows the reader to drill into the detailed report directly from the summary.
 
 Output ONLY complete HTML.`;
 }
