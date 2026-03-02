@@ -639,6 +639,9 @@ table tr:hover td { background: var(--surface-2); }
             </button>
             <button class="btn" onclick="navigateTo('dashboard')">Cancel</button>
           </div>
+          <div id="gen-exec-hint" style="display:none;margin-top:12px;padding:12px 16px;background:rgba(184,134,11,0.1);border-radius:8px;font-size:0.85rem;color:var(--text-muted)">
+            This will generate <strong>all 4 reports</strong> (SERP, LLM, Social Media, then Executive Summary) with cross-links between them. Takes 3-5 minutes.
+          </div>
 
           <div id="gen-progress" style="display:none;margin-top:24px">
             <div style="background:var(--bg);border-radius:8px;height:8px;overflow:hidden">
@@ -892,61 +895,113 @@ async function generateReport() {
   document.getElementById('gen-progress').style.display = 'block';
   document.getElementById('gen-button').disabled = true;
 
-  setProgress(10, 'Connecting to backend...');
+  const kw = keywords || client.keywords.join(', ');
+  const sheetUrl = sheet || client.sheetUrl;
 
   try {
-    setProgress(20, 'Fetching data & generating report (this takes 30-90 seconds)...');
+    if (type === 'executive') {
+      // ── Generate All Reports then Executive Summary ──
+      const reportIds = {};
 
-    const resp = await fetch('/api/generate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Admin-Password': password,
-      },
-      body: JSON.stringify({
-        clientId,
-        clientName: client.name,
-        type,
-        keywords: keywords || client.keywords.join(', '),
-        sheetUrl: sheet || client.sheetUrl,
-      }),
-    });
+      // Step 1: SERP Report
+      setProgress(10, 'Step 1/4 — Generating SERP & ORM Report...');
+      try {
+        const serpResult = await callGenerate(password, { clientId, clientName: client.name, type: 'serp', keywords: kw, sheetUrl });
+        if (serpResult.report) { reportIds.serp = serpResult.report; state.reports.unshift(serpResult.report); }
+      } catch (e) { console.warn('SERP report failed:', e.message); }
 
-    const data = await resp.json();
+      // Step 2: LLM Report
+      setProgress(30, 'Step 2/4 — Generating LLM Reputation Intelligence Report...');
+      try {
+        const llmResult = await callGenerate(password, { clientId, clientName: client.name, type: 'llm', keywords: kw, sheetUrl });
+        if (llmResult.report) { reportIds.llm = llmResult.report; state.reports.unshift(llmResult.report); }
+      } catch (e) { console.warn('LLM report failed:', e.message); }
 
-    if (!resp.ok || data.error) {
-      throw new Error(data.error || `Server error ${resp.status}`);
-    }
+      // Step 3: Social Media Report
+      setProgress(55, 'Step 3/4 — Generating Social Media Intelligence Report...');
+      try {
+        const socialResult = await callGenerate(password, { clientId, clientName: client.name, type: 'social', keywords: kw, sheetUrl });
+        if (socialResult.report) { reportIds.social = socialResult.report; state.reports.unshift(socialResult.report); }
+      } catch (e) { console.warn('Social report failed:', e.message); }
 
-    setProgress(100, 'Complete!');
+      // Step 4: Executive Summary with links to the other reports
+      setProgress(75, 'Step 4/4 — Generating Executive Summary with report links...');
+      const execResult = await callGenerate(password, {
+        clientId, clientName: client.name, type: 'executive', keywords: kw, sheetUrl,
+        linkedReports: {
+          serp: reportIds.serp ? { shareToken: reportIds.serp.shareToken, id: reportIds.serp.id } : null,
+          llm: reportIds.llm ? { shareToken: reportIds.llm.shareToken, id: reportIds.llm.id } : null,
+          social: reportIds.social ? { shareToken: reportIds.social.shareToken, id: reportIds.social.id } : null,
+        }
+      });
 
-    // Add report to local state too
-    if (data.report) {
-      state.reports.unshift(data.report);
+      if (execResult.report) { state.reports.unshift(execResult.report); }
       saveState();
+      setProgress(100, 'All reports generated!');
+
+      setTimeout(() => {
+        resetGenUI();
+        const count = Object.values(reportIds).filter(Boolean).length + 1;
+        showToast(`${count} reports generated for ${client.name}`);
+        refreshUI();
+        navigateTo('reports');
+      }, 1200);
+
+    } else {
+      // ── Single report generation ──
+      setProgress(20, 'Fetching data & generating report (this takes 30-90 seconds)...');
+      const data = await callGenerate(password, { clientId, clientName: client.name, type, keywords: kw, sheetUrl });
+
+      setProgress(100, 'Complete!');
+      if (data.report) { state.reports.unshift(data.report); saveState(); }
+
+      setTimeout(() => {
+        resetGenUI();
+        showToast(`${data.report.typeName} report generated for ${client.name}`);
+        refreshUI();
+        navigateTo('reports');
+      }, 1000);
     }
-
-    setTimeout(() => {
-      document.getElementById('gen-progress').style.display = 'none';
-      document.getElementById('gen-button').disabled = false;
-      document.getElementById('gen-progress-bar').style.width = '0%';
-      showToast(`${data.report.typeName} report generated for ${client.name}`);
-      refreshUI();
-      navigateTo('reports');
-    }, 1000);
-
   } catch (err) {
-    document.getElementById('gen-progress').style.display = 'none';
-    document.getElementById('gen-button').disabled = false;
-    document.getElementById('gen-progress-bar').style.width = '0%';
+    resetGenUI();
     showToast('Error: ' + err.message);
   }
+}
+
+async function callGenerate(password, body) {
+  const resp = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok || data.error) throw new Error(data.error || `Server error ${resp.status}`);
+  return data;
+}
+
+function resetGenUI() {
+  document.getElementById('gen-progress').style.display = 'none';
+  document.getElementById('gen-button').disabled = false;
+  document.getElementById('gen-progress-bar').style.width = '0%';
 }
 
 function setProgress(pct, msg) {
   document.getElementById('gen-progress-bar').style.width = pct + '%';
   document.getElementById('gen-status').textContent = msg;
 }
+
+// Update button label when report type changes
+document.getElementById('gen-type').addEventListener('change', function() {
+  const btn = document.getElementById('gen-button');
+  const hint = document.getElementById('gen-exec-hint');
+  if (this.value === 'executive') {
+    btn.textContent = 'Generate All Reports';
+    hint.style.display = 'block';
+  } else {
+    btn.textContent = 'Generate Report';
+    hint.style.display = 'none';
+  }
+});
 
 function getShareUrl(report) {
   return window.location.origin + '/share/' + report.shareToken;
