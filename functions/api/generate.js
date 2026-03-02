@@ -35,7 +35,7 @@ export async function onRequestPost(context) {
     try { const s = await env.CITADEL_KV.get("logo-base64"); if (s) logoDataUri = `data:image/jpeg;base64,${s}`; } catch {}
 
     const systemPrompt = getSystemPrompt(type, logoDataUri);
-    const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
+    const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nIMPORTANT INSTRUCTIONS:\n- Generate the COMPLETE, COMPREHENSIVE HTML report with ALL sections fully populated with real data analysis.\n- Every section must contain detailed analysis — NOT placeholder text, NOT "data unavailable" messages.\n- Parse and analyze ALL the CSV/JSON data provided above. Extract real numbers, real URLs, real rankings.\n- The report MUST include real computed metrics: ownership percentages, sentiment distributions, movement analysis.\n- Tables must be fully populated with actual data rows from the sheet.\n- Do NOT abbreviate, summarize briefly, or skip sections. This is a premium client-facing deliverable.\n- The HTML output should be 15,000-40,000 characters minimum for a thorough report.\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
 
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Anthropic API key not configured." }, 400);
 
@@ -142,7 +142,7 @@ async function callClaudeStreaming(apiKey, systemPrompt, userPrompt) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST",
     headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
-    body: JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:16000,stream:true,system:systemPrompt,messages:[{role:"user",content:userPrompt}]})
+    body: JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:64000,stream:true,system:systemPrompt,messages:[{role:"user",content:userPrompt}]})
   });
   if (!r.ok) { const e = await r.text(); throw new Error(`Claude API ${r.status}: ${e}`); }
   const reader = r.body.getReader(), dec = new TextDecoder();
