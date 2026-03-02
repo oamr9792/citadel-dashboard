@@ -34,7 +34,7 @@ export async function onRequestPost(context) {
     const logoDataUri = "https://citadel-dashboard.pages.dev/logo.png";
 
     const systemPrompt = getSystemPrompt(type, logoDataUri);
-    const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nIMPORTANT INSTRUCTIONS:\n- Generate the COMPLETE, COMPREHENSIVE HTML report with ALL sections fully populated with real data analysis.\n- Every section must contain detailed analysis — NOT placeholder text, NOT "data unavailable" messages.\n- Parse and analyze ALL the CSV/JSON data provided above. Extract real numbers, real URLs, real rankings.\n- The report MUST include real computed metrics: ownership percentages, sentiment distributions, movement analysis.\n- Tables must be fully populated with actual data rows from the sheet.\n- Do NOT abbreviate, summarize briefly, or skip sections. This is a premium client-facing deliverable.\n- The HTML output should be 15,000-40,000 characters minimum for a thorough report.\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
+    const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nIMPORTANT INSTRUCTIONS:\n- Generate the COMPLETE, COMPREHENSIVE HTML report with ALL sections fully populated with real data analysis.\n- Every section must contain detailed analysis — NOT placeholder text, NOT "data unavailable" messages.\n- Parse and analyze ALL the CSV/JSON data provided above. Extract real numbers, real URLs, real rankings.\n- The report MUST include real computed metrics: ownership percentages, sentiment distributions, movement analysis.\n- Tables must be fully populated with actual data rows from the sheet.\n- Do NOT abbreviate, summarize briefly, or skip sections. This is a premium client-facing deliverable.\n- The HTML output should be 15,000-40,000 characters minimum for a thorough report.\n- REPORTING PERIOD: If only one date/snapshot of data is provided, this is the FIRST report — present it as a baseline snapshot of the current state of search results. The period should be labeled as the snapshot date only (e.g., "March 1, 2026").\n- If TWO dates/snapshots are provided, this is a MONTHLY report — compare the current snapshot against the previous month's snapshot. Label the period as "Previous Date — Current Date" and include full trend analysis showing what improved, worsened, or stayed the same.\n- Reports are produced monthly, typically on the 1st of each month.\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
 
     if (!env.ANTHROPIC_API_KEY) return json({ error: "Anthropic API key not configured." }, 400);
 
@@ -79,26 +79,43 @@ async function fetchGoogleSheet(sheetUrl) {
             if (fl.includes("rank")||fl.includes("serp")||fl.includes("keyword")||fl.includes("snapshot")) tn = `SERP_Tracker_gid${gid}`;
             else if (fl.includes("content")||fl.includes("live url")||fl.includes("created")) tn = `Content_Created_gid${gid}`;
             
-            // If sheet is very large (>200 rows), only send the most recent snapshot
+            // If sheet is very large (>200 rows), filter intelligently
             const lines = csv.split("\n");
             if (lines.length > 200) {
               const header = lines[0];
-              // Find the most recent date by checking the first column
-              const dates = new Set();
+              // Collect all dates
+              const dateRows = {};
               for (let i = 1; i < lines.length; i++) {
                 const firstCol = lines[i].split(",")[0].replace(/"/g, "").trim();
-                if (firstCol && firstCol.match(/\d/)) dates.add(firstCol);
+                if (firstCol && firstCol.match(/\d/)) {
+                  if (!dateRows[firstCol]) dateRows[firstCol] = [];
+                  dateRows[firstCol].push(lines[i]);
+                }
               }
-              const sortedDates = Array.from(dates).sort((a, b) => new Date(b) - new Date(a));
-              const recentDate = sortedDates[0];
-              const prevDate = sortedDates[1] || null;
               
-              // Filter to most recent + previous date for trend analysis
-              const filtered = [header];
-              for (let i = 1; i < lines.length; i++) {
-                const firstCol = lines[i].split(",")[0].replace(/"/g, "").trim();
-                if (firstCol === recentDate || firstCol === prevDate) filtered.push(lines[i]);
+              // Sort dates newest first
+              const sortedDates = Object.keys(dateRows).sort((a, b) => new Date(b) - new Date(a));
+              const latestDate = sortedDates[0];
+              const latestMonth = new Date(latestDate).getMonth();
+              const latestYear = new Date(latestDate).getFullYear();
+              
+              // Find the most recent snapshot from the PREVIOUS month for comparison
+              let prevMonthDate = null;
+              for (const d of sortedDates) {
+                const dt = new Date(d);
+                if (dt.getMonth() !== latestMonth || dt.getFullYear() !== latestYear) {
+                  prevMonthDate = d;
+                  break;
+                }
               }
+              
+              // Build filtered CSV: latest snapshot + previous month snapshot (if exists)
+              const filtered = [header];
+              // Add all rows from the latest date
+              if (dateRows[latestDate]) filtered.push(...dateRows[latestDate]);
+              // Add previous month rows for trend comparison
+              if (prevMonthDate && dateRows[prevMonthDate]) filtered.push(...dateRows[prevMonthDate]);
+              
               tabs[tn] = filtered.join("\n");
             } else {
               tabs[tn] = csv;
