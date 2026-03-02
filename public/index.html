@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reputation Citadel — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0e17;
+  --surface: #111827;
+  --surface-2: #1a2332;
+  --border: #1e293b;
+  --border-light: #2a3a4e;
+  --navy: #1b2a4a;
+  --gold: #b8860b;
+  --gold-light: #d4a843;
+  --green: #10b981;
+  --green-dim: rgba(16,185,129,0.12);
+  --red: #ef4444;
+  --red-dim: rgba(239,68,68,0.12);
+  --amber: #f59e0b;
+  --amber-dim: rgba(245,158,11,0.12);
+  --blue: #3b82f6;
+  --blue-dim: rgba(59,130,246,0.12);
+  --text: #e2e8f0;
+  --text-muted: #64748b;
+  --text-dim: #475569;
+  --font-display: 'DM Serif Display', Georgia, serif;
+  --font-body: 'DM Sans', system-ui, sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── Login Screen ── */
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 30% 20%, rgba(27,42,74,0.4) 0%, transparent 60%),
+              radial-gradient(ellipse at 70% 80%, rgba(184,134,11,0.08) 0%, transparent 50%),
+              var(--bg);
+}
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 48px;
+  width: 400px;
+  max-width: 90vw;
+  text-align: center;
+}
+
+.login-card h1 {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  color: var(--gold-light);
+  margin-bottom: 8px;
+}
+
+.login-card p {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 32px;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 12px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  margin-bottom: 16px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.login-card input:focus { border-color: var(--gold); }
+
+.login-card button {
+  width: 100%;
+  padding: 12px;
+  background: var(--gold);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.login-card button:hover { background: var(--gold-light); }
+
+/* ── App Layout ── */
+.app { display: none; min-height: 100vh; }
+.app.active { display: flex; }
+
+/* Sidebar */
+.sidebar {
+  width: 260px;
+  min-height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 100;
+}
+
+.sidebar-logo {
+  padding: 24px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-logo h2 {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  color: var(--gold-light);
+  letter-spacing: 0.02em;
+}
+
+.sidebar-logo span {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+.sidebar-nav { flex: 1; padding: 16px 12px; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.15s;
+  margin-bottom: 2px;
+}
+
+.nav-item:hover { color: var(--text); background: var(--surface-2); }
+.nav-item.active { color: var(--gold-light); background: rgba(184,134,11,0.1); }
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+.sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* Main Content */
+.main {
+  margin-left: 260px;
+  flex: 1;
+  min-height: 100vh;
+}
+
+.topbar {
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.topbar h1 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+}
+
+.topbar-actions { display: flex; gap: 12px; }
+
+.content { padding: 32px; }
+
+/* ── Cards & Components ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.card-header h3 {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.stat-card .label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.stat-card .value {
+  font-family: var(--font-display);
+  font-size: 1.8rem;
+}
+
+.stat-card.green .value { color: var(--green); }
+.stat-card.red .value { color: var(--red); }
+.stat-card.amber .value { color: var(--amber); }
+.stat-card.blue .value { color: var(--blue); }
+.stat-card.gold .value { color: var(--gold-light); }
+
+/* Buttons */
+.btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn:hover { background: var(--border); }
+
+.btn-primary {
+  background: var(--gold);
+  color: #000;
+  border-color: var(--gold);
+}
+
+.btn-primary:hover { background: var(--gold-light); }
+
+.btn-sm { padding: 6px 14px; font-size: 0.8rem; }
+
+.btn-danger { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.3); }
+.btn-danger:hover { background: rgba(239,68,68,0.2); }
+
+/* Forms */
+.form-group { margin-bottom: 20px; }
+
+.form-group label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.form-group input, .form-group select, .form-group textarea {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  border-color: var(--gold);
+}
+
+.form-group textarea { min-height: 80px; resize: vertical; }
+
+.form-hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* Tables */
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+table td {
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  border-bottom: 1px solid var(--border);
+}
+
+table tr:hover td { background: var(--surface-2); }
+
+/* Tags / Badges */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-green { background: var(--green-dim); color: var(--green); }
+.badge-red { background: var(--red-dim); color: var(--red); }
+.badge-amber { background: var(--amber-dim); color: var(--amber); }
+.badge-blue { background: var(--blue-dim); color: var(--blue); }
+
+/* Report cards */
+.report-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  transition: border-color 0.15s;
+}
+
+.report-card:hover { border-color: var(--border-light); }
+
+.report-card .report-info h4 { font-size: 0.95rem; margin-bottom: 4px; }
+.report-card .report-info p { font-size: 0.8rem; color: var(--text-muted); }
+.report-card .report-actions { display: flex; gap: 8px; }
+
+/* Modal */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-overlay.active { display: flex; }
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px;
+  width: 560px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal h2 {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  margin-bottom: 24px;
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+
+.empty-state svg { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.3; }
+.empty-state h3 { font-family: var(--font-display); color: var(--text-dim); margin-bottom: 8px; }
+.empty-state p { font-size: 0.85rem; margin-bottom: 20px; }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 20px;
+  font-size: 0.88rem;
+  z-index: 2000;
+  display: none;
+  animation: slideUp 0.3s ease;
+}
+
+.toast.active { display: block; }
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Page sections */
+.page { display: none; }
+.page.active { display: block; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════ -->
+<!-- LOGIN SCREEN                            -->
+<!-- ════════════════════════════════════════ -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <h1>Reputation Citadel</h1>
+    <p>Command Center — Enter your access password</p>
+    <input type="password" id="loginPassword" placeholder="Password" onkeydown="if(event.key==='Enter')login()">
+    <button onclick="login()">Enter</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ -->
+<!-- MAIN APP                                -->
+<!-- ════════════════════════════════════════ -->
+<div class="app" id="app">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h2>Reputation Citadel</h2>
+      <span>Command Center</span>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-page="dashboard" onclick="navigateTo('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </div>
+      <div class="nav-item" data-page="clients" onclick="navigateTo('clients')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Clients
+      </div>
+      <div class="nav-item" data-page="reports" onclick="navigateTo('reports')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Reports
+      </div>
+      <div class="nav-item" data-page="generate" onclick="navigateTo('generate')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Generate Report
+      </div>
+      <div class="nav-item" data-page="settings" onclick="navigateTo('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div style="margin-bottom:4px">Reputation Citadel v1.0</div>
+      <a href="#" onclick="logout()" style="color:var(--text-dim);text-decoration:none;font-size:0.72rem">Sign Out</a>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <!-- ═══ DASHBOARD PAGE ═══ -->
+    <div class="page active" id="page-dashboard">
+      <div class="topbar">
+        <h1>Dashboard</h1>
+      </div>
+      <div class="content">
+        <div class="stats-grid">
+          <div class="stat-card gold"><div class="label">Active Clients</div><div class="value" id="stat-clients">0</div></div>
+          <div class="stat-card blue"><div class="label">Reports Generated</div><div class="value" id="stat-reports">0</div></div>
+          <div class="stat-card green"><div class="label">Reports This Month</div><div class="value" id="stat-month">0</div></div>
+          <div class="stat-card amber"><div class="label">Pending Generation</div><div class="value" id="stat-pending">0</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Recent Reports</h3>
+            <button class="btn btn-sm" onclick="navigateTo('reports')">View All</button>
+          </div>
+          <div id="recent-reports">
+            <div class="empty-state">
+              <h3>No reports yet</h3>
+              <p>Generate your first report to get started</p>
+              <button class="btn btn-primary" onclick="navigateTo('generate')">Generate Report</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CLIENTS PAGE ═══ -->
+    <div class="page" id="page-clients">
+      <div class="topbar">
+        <h1>Clients</h1>
+        <div class="topbar-actions">
+          <button class="btn btn-primary" onclick="openModal('addClient')">+ Add Client</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Client Name</th>
+                  <th>Keywords</th>
+                  <th>Google Sheet</th>
+                  <th>Reports</th>
+                  <th>Last Report</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="clients-table">
+                <tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:40px">No clients yet — click "Add Client" to start</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ REPORTS PAGE ═══ -->
+    <div class="page" id="page-reports">
+      <div class="topbar">
+        <h1>Reports</h1>
+      </div>
+      <div class="content">
+        <div class="form-group" style="max-width:300px;margin-bottom:20px">
+          <select id="reports-client-filter" onchange="filterReports()">
+            <option value="all">All Clients</option>
+          </select>
+        </div>
+        <div id="reports-list">
+          <div class="empty-state">
+            <h3>No reports yet</h3>
+            <p>Generate your first report from the Generate page</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ GENERATE PAGE ═══ -->
+    <div class="page" id="page-generate">
+      <div class="topbar">
+        <h1>Generate Report</h1>
+      </div>
+      <div class="content">
+        <div class="card" style="max-width:640px">
+          <h3 style="font-family:var(--font-display);margin-bottom:20px">New Report</h3>
+
+          <div class="form-group">
+            <label>Client</label>
+            <select id="gen-client">
+              <option value="">Select a client...</option>
+            </select>
+            <div class="form-hint">Or <a href="#" onclick="navigateTo('clients');return false" style="color:var(--gold)">add a new client</a> first</div>
+          </div>
+
+          <div class="form-group">
+            <label>Report Type</label>
+            <select id="gen-type">
+              <option value="serp">SERP & ORM Analysis</option>
+              <option value="social">Social Media Intelligence</option>
+              <option value="llm">LLM Reputation Intelligence</option>
+              <option value="executive">Executive Summary (all reports)</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="gen-sheet-group">
+            <label>Google Sheet URL</label>
+            <input type="url" id="gen-sheet" placeholder="https://docs.google.com/spreadsheets/d/...">
+            <div class="form-hint">Sheet must be shared as "Anyone with the link — Viewer"</div>
+          </div>
+
+          <div class="form-group">
+            <label>Keywords (comma separated)</label>
+            <input type="text" id="gen-keywords" placeholder="e.g., john smith, john smith wells fargo">
+          </div>
+
+          <div class="form-group">
+            <label>Previous Report (optional, for trend analysis)</label>
+            <input type="file" id="gen-previous" accept=".html,.pdf" style="padding:8px">
+          </div>
+
+          <div style="display:flex;gap:12px;margin-top:24px">
+            <button class="btn btn-primary" onclick="generateReport()" id="gen-button">
+              Generate Report
+            </button>
+            <button class="btn" onclick="navigateTo('dashboard')">Cancel</button>
+          </div>
+
+          <div id="gen-progress" style="display:none;margin-top:24px">
+            <div style="background:var(--bg);border-radius:8px;height:8px;overflow:hidden">
+              <div id="gen-progress-bar" style="height:100%;background:var(--gold);width:0%;transition:width 0.5s"></div>
+            </div>
+            <p id="gen-status" style="font-size:0.85rem;color:var(--text-muted);margin-top:8px">Initializing...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ SETTINGS PAGE ═══ -->
+    <div class="page" id="page-settings">
+      <div class="topbar">
+        <h1>Settings</h1>
+      </div>
+      <div class="content" style="max-width:640px">
+        <div class="card">
+          <h3 style="font-family:var(--font-display);margin-bottom:20px">API Credentials</h3>
+          <div class="form-group">
+            <label>Anthropic API Key</label>
+            <input type="password" id="set-anthropic" placeholder="sk-ant-...">
+            <div class="form-hint">Used for Claude report generation</div>
+          </div>
+          <div class="form-group">
+            <label>DataForSEO Login</label>
+            <input type="text" id="set-dfs-login" placeholder="your@email.com">
+          </div>
+          <div class="form-group">
+            <label>DataForSEO Password</label>
+            <input type="password" id="set-dfs-password" placeholder="API password">
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Credentials</button>
+        </div>
+
+        <div class="card">
+          <h3 style="font-family:var(--font-display);margin-bottom:20px">Dashboard Access</h3>
+          <div class="form-group">
+            <label>Dashboard Password</label>
+            <input type="password" id="set-admin-pw" placeholder="Change dashboard password">
+          </div>
+          <button class="btn" onclick="changePassword()">Update Password</button>
+        </div>
+
+        <div class="card">
+          <h3 style="font-family:var(--font-display);margin-bottom:20px">Auto-Generation Schedule</h3>
+          <div class="form-group">
+            <label>Monthly Report Generation</label>
+            <select id="set-schedule">
+              <option value="off">Disabled</option>
+              <option value="1">1st of each month</option>
+              <option value="15">15th of each month</option>
+            </select>
+            <div class="form-hint">When enabled, all active client reports regenerate automatically</div>
+          </div>
+          <button class="btn" onclick="saveSchedule()">Save Schedule</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ════════════════════════════════════════ -->
+<!-- ADD CLIENT MODAL                        -->
+<!-- ════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-addClient">
+  <div class="modal">
+    <h2>Add New Client</h2>
+    <div class="form-group">
+      <label>Client Name</label>
+      <input type="text" id="client-name" placeholder="e.g., John Smith">
+    </div>
+    <div class="form-group">
+      <label>Entity / Keywords</label>
+      <input type="text" id="client-keywords" placeholder="e.g., john smith, john smith wells fargo">
+      <div class="form-hint">Comma-separated. Used for SERP tracking and LLM analysis</div>
+    </div>
+    <div class="form-group">
+      <label>Google Sheet URL (SERP Tracker)</label>
+      <input type="url" id="client-sheet" placeholder="https://docs.google.com/spreadsheets/d/...">
+      <div class="form-hint">Must be shared publicly as Viewer</div>
+    </div>
+    <div class="form-group">
+      <label>Client Email (for sharing reports)</label>
+      <input type="email" id="client-email" placeholder="client@example.com">
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="client-notes" placeholder="Any additional context..."></textarea>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:24px">
+      <button class="btn btn-primary" onclick="addClient()">Add Client</button>
+      <button class="btn" onclick="closeModal('addClient')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+let state = {
+  authenticated: false,
+  clients: [],
+  reports: [],
+  settings: {
+    anthropicKey: '',
+    dfsLogin: '',
+    dfsPassword: '',
+    schedule: 'off'
+  }
+};
+
+// ══════════════════════════════════════════
+// PERSISTENCE (localStorage for Phase 1, KV in Phase 2)
+// ══════════════════════════════════════════
+function loadState() {
+  try {
+    const saved = localStorage.getItem('citadel_state');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      state.clients = parsed.clients || [];
+      state.reports = parsed.reports || [];
+      state.settings = parsed.settings || state.settings;
+    }
+  } catch(e) {}
+}
+
+function saveState() {
+  localStorage.setItem('citadel_state', JSON.stringify({
+    clients: state.clients,
+    reports: state.reports,
+    settings: state.settings
+  }));
+}
+
+// ══════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════
+function login() {
+  const pw = document.getElementById('loginPassword').value;
+  const stored = localStorage.getItem('citadel_password') || 'citadel2025';
+  if (pw === stored) {
+    state.authenticated = true;
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').classList.add('active');
+    loadState();
+    refreshUI();
+    // Sync with backend
+    syncReportsFromBackend();
+    uploadLogoToKV();
+  } else {
+    showToast('Incorrect password');
+  }
+}
+
+function logout() {
+  state.authenticated = false;
+  document.getElementById('app').classList.remove('active');
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginPassword').value = '';
+}
+
+function changePassword() {
+  const newPw = document.getElementById('set-admin-pw').value;
+  if (newPw.length < 4) { showToast('Password too short'); return; }
+  localStorage.setItem('citadel_password', newPw);
+  showToast('Password updated');
+  document.getElementById('set-admin-pw').value = '';
+}
+
+// ══════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════
+function navigateTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+  refreshUI();
+}
+
+// ══════════════════════════════════════════
+// CLIENTS
+// ══════════════════════════════════════════
+function addClient() {
+  const name = document.getElementById('client-name').value.trim();
+  const keywords = document.getElementById('client-keywords').value.trim();
+  const sheet = document.getElementById('client-sheet').value.trim();
+  const email = document.getElementById('client-email').value.trim();
+  const notes = document.getElementById('client-notes').value.trim();
+
+  if (!name) { showToast('Client name is required'); return; }
+
+  const client = {
+    id: 'c_' + Date.now(),
+    name,
+    keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+    sheetUrl: sheet,
+    email,
+    notes,
+    createdAt: new Date().toISOString(),
+    shareToken: generateToken()
+  };
+
+  state.clients.push(client);
+  saveState();
+  closeModal('addClient');
+  showToast(`Client "${name}" added`);
+  refreshUI();
+
+  // Clear form
+  ['client-name','client-keywords','client-sheet','client-email','client-notes'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+}
+
+function deleteClient(id) {
+  if (!confirm('Delete this client and all their reports?')) return;
+  state.clients = state.clients.filter(c => c.id !== id);
+  state.reports = state.reports.filter(r => r.clientId !== id);
+  saveState();
+  refreshUI();
+  showToast('Client deleted');
+}
+
+function generateToken() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ══════════════════════════════════════════
+// REPORTS
+// ══════════════════════════════════════════
+async function generateReport() {
+  const clientId = document.getElementById('gen-client').value;
+  const type = document.getElementById('gen-type').value;
+  const sheet = document.getElementById('gen-sheet').value;
+  const keywords = document.getElementById('gen-keywords').value;
+
+  if (!clientId) { showToast('Please select a client'); return; }
+
+  const client = state.clients.find(c => c.id === clientId);
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+
+  // Show progress
+  document.getElementById('gen-progress').style.display = 'block';
+  document.getElementById('gen-button').disabled = true;
+
+  setProgress(10, 'Connecting to backend...');
+
+  try {
+    setProgress(20, 'Fetching data & generating report (this takes 30-90 seconds)...');
+
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Admin-Password': password,
+      },
+      body: JSON.stringify({
+        clientId,
+        clientName: client.name,
+        type,
+        keywords: keywords || client.keywords.join(', '),
+        sheetUrl: sheet || client.sheetUrl,
+      }),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || `Server error ${resp.status}`);
+    }
+
+    setProgress(100, 'Complete!');
+
+    // Add report to local state too
+    if (data.report) {
+      state.reports.unshift(data.report);
+      saveState();
+    }
+
+    setTimeout(() => {
+      document.getElementById('gen-progress').style.display = 'none';
+      document.getElementById('gen-button').disabled = false;
+      document.getElementById('gen-progress-bar').style.width = '0%';
+      showToast(`${data.report.typeName} report generated for ${client.name}`);
+      refreshUI();
+      navigateTo('reports');
+    }, 1000);
+
+  } catch (err) {
+    document.getElementById('gen-progress').style.display = 'none';
+    document.getElementById('gen-button').disabled = false;
+    document.getElementById('gen-progress-bar').style.width = '0%';
+    showToast('Error: ' + err.message);
+  }
+}
+
+function setProgress(pct, msg) {
+  document.getElementById('gen-progress-bar').style.width = pct + '%';
+  document.getElementById('gen-status').textContent = msg;
+}
+
+function getShareUrl(report) {
+  return window.location.origin + '/share/' + report.shareToken;
+}
+
+function copyShareLink(report) {
+  const url = getShareUrl(report);
+  navigator.clipboard.writeText(url).then(() => {
+    showToast('Share link copied to clipboard');
+  }).catch(() => {
+    prompt('Copy this link:', url);
+  });
+}
+
+function deleteReport(id) {
+  if (!confirm('Delete this report?')) return;
+  state.reports = state.reports.filter(r => r.id !== id);
+  saveState();
+  refreshUI();
+  showToast('Report deleted');
+}
+
+function filterReports() {
+  refreshUI();
+}
+
+// ══════════════════════════════════════════
+// SETTINGS
+// ══════════════════════════════════════════
+function saveSettings() {
+  state.settings.anthropicKey = document.getElementById('set-anthropic').value;
+  state.settings.dfsLogin = document.getElementById('set-dfs-login').value;
+  state.settings.dfsPassword = document.getElementById('set-dfs-password').value;
+  saveState();
+  showToast('Credentials saved');
+}
+
+function saveSchedule() {
+  state.settings.schedule = document.getElementById('set-schedule').value;
+  saveState();
+  showToast('Schedule saved');
+}
+
+// ══════════════════════════════════════════
+// UI REFRESH
+// ══════════════════════════════════════════
+function refreshUI() {
+  // Stats
+  document.getElementById('stat-clients').textContent = state.clients.length;
+  document.getElementById('stat-reports').textContent = state.reports.length;
+
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  document.getElementById('stat-month').textContent = state.reports.filter(r => r.createdAt.startsWith(thisMonth)).length;
+  document.getElementById('stat-pending').textContent = state.clients.filter(c => {
+    return !state.reports.some(r => r.clientId === c.id && r.createdAt.startsWith(thisMonth));
+  }).length;
+
+  // Clients table
+  const tbody = document.getElementById('clients-table');
+  if (state.clients.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:40px">No clients yet</td></tr>';
+  } else {
+    tbody.innerHTML = state.clients.map(c => {
+      const reportCount = state.reports.filter(r => r.clientId === c.id).length;
+      const lastReport = state.reports.find(r => r.clientId === c.id);
+      const lastDate = lastReport ? new Date(lastReport.createdAt).toLocaleDateString() : '—';
+      const sheetDisplay = c.sheetUrl ? '<span class="badge badge-green">Connected</span>' : '<span class="badge badge-amber">None</span>';
+      return `<tr>
+        <td><strong>${esc(c.name)}</strong></td>
+        <td style="font-size:0.8rem;color:var(--text-muted)">${esc(c.keywords.join(', ') || '—')}</td>
+        <td>${sheetDisplay}</td>
+        <td>${reportCount}</td>
+        <td style="color:var(--text-muted)">${lastDate}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteClient('${c.id}')">Delete</button></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Client dropdowns
+  const clientOptions = '<option value="">Select a client...</option>' +
+    state.clients.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  document.getElementById('gen-client').innerHTML = clientOptions;
+
+  const filterOptions = '<option value="all">All Clients</option>' +
+    state.clients.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  document.getElementById('reports-client-filter').innerHTML = filterOptions;
+
+  // Auto-fill sheet URL when client selected
+  document.getElementById('gen-client').onchange = function() {
+    const client = state.clients.find(c => c.id === this.value);
+    if (client) {
+      document.getElementById('gen-sheet').value = client.sheetUrl || '';
+      document.getElementById('gen-keywords').value = client.keywords.join(', ');
+    }
+  };
+
+  // Reports list
+  const filter = document.getElementById('reports-client-filter').value;
+  const filtered = filter === 'all' ? state.reports : state.reports.filter(r => r.clientId === filter);
+
+  const reportsList = document.getElementById('reports-list');
+  if (filtered.length === 0) {
+    reportsList.innerHTML = '<div class="empty-state"><h3>No reports</h3><p>Generate a report to see it here</p></div>';
+  } else {
+    reportsList.innerHTML = filtered.map(r => {
+      const typeBadge = {
+        serp: 'badge-blue',
+        social: 'badge-green',
+        llm: 'badge-amber',
+        executive: 'badge-blue'
+      }[r.type] || 'badge-blue';
+
+      return `<div class="report-card">
+        <div class="report-info">
+          <h4>${esc(r.clientName)} — ${esc(r.typeName)}</h4>
+          <p>
+            <span class="badge ${typeBadge}">${esc(r.typeName)}</span>
+            &nbsp; ${new Date(r.createdAt).toLocaleDateString()} &nbsp;
+            ${r.keywords ? '· ' + esc(r.keywords) : ''}
+          </p>
+        </div>
+        <div class="report-actions">
+          <button class="btn btn-sm" onclick="viewReport('${r.id}')">View</button>
+          <button class="btn btn-sm" onclick="copyShareLink(state.reports.find(x=>x.id==='${r.id}'))">Share</button>
+          <button class="btn btn-sm" onclick="downloadPdf('${r.id}', '${esc(r.clientName)}')">PDF</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteReport('${r.id}')">Delete</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Recent reports on dashboard
+  const recent = state.reports.slice(0, 5);
+  const recentEl = document.getElementById('recent-reports');
+  if (recent.length === 0) {
+    recentEl.innerHTML = '<div class="empty-state"><h3>No reports yet</h3><p>Generate your first report to get started</p><button class="btn btn-primary" onclick="navigateTo(\'generate\')">Generate Report</button></div>';
+  } else {
+    recentEl.innerHTML = recent.map(r => `<div class="report-card">
+      <div class="report-info">
+        <h4>${esc(r.clientName)} — ${esc(r.typeName)}</h4>
+        <p>${new Date(r.createdAt).toLocaleDateString()}</p>
+      </div>
+      <div class="report-actions">
+        <button class="btn btn-sm" onclick="copyShareLink(state.reports.find(x=>x.id==='${r.id}'))">Share</button>
+      </div>
+    </div>`).join('');
+  }
+
+  // Settings
+  if (state.settings.anthropicKey) document.getElementById('set-anthropic').value = state.settings.anthropicKey;
+  if (state.settings.dfsLogin) document.getElementById('set-dfs-login').value = state.settings.dfsLogin;
+  if (state.settings.dfsPassword) document.getElementById('set-dfs-password').value = state.settings.dfsPassword;
+  document.getElementById('set-schedule').value = state.settings.schedule || 'off';
+}
+
+// View report in new tab
+async function viewReport(reportId) {
+  const report = state.reports.find(r => r.id === reportId);
+  if (report && report.shareToken) {
+    window.open('/share/' + report.shareToken, '_blank');
+  } else {
+    // Fallback: fetch via API
+    const password = localStorage.getItem('citadel_password') || 'citadel2025';
+    try {
+      const resp = await fetch(`/api/report-html?id=${reportId}`, {
+        headers: { 'X-Admin-Password': password },
+      });
+      if (resp.ok) {
+        const html = await resp.text();
+        const win = window.open('', '_blank');
+        win.document.write(html);
+        win.document.close();
+      } else {
+        showToast('Could not load report');
+      }
+    } catch (err) {
+      showToast('Error loading report: ' + err.message);
+    }
+  }
+}
+
+// Download report as PDF (uses browser print)
+async function downloadPdf(reportId, clientName) {
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+  try {
+    const resp = await fetch(`/api/report-html?id=${reportId}`, {
+      headers: { 'X-Admin-Password': password },
+    });
+    if (resp.ok) {
+      const html = await resp.text();
+      const win = window.open('', '_blank');
+      win.document.write(html);
+      win.document.close();
+      // Wait for content to render then trigger print
+      setTimeout(() => {
+        win.print();
+      }, 1500);
+    } else {
+      showToast('Could not load report for PDF');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message);
+  }
+}
+
+// Sync reports from backend (on load)
+async function syncReportsFromBackend() {
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+  try {
+    const resp = await fetch('/api/reports', {
+      headers: { 'X-Admin-Password': password },
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.reports && data.reports.length > 0) {
+        // Merge backend reports with local state
+        const existingIds = new Set(state.reports.map(r => r.id));
+        for (const r of data.reports) {
+          if (!existingIds.has(r.id)) {
+            state.reports.push(r);
+          }
+        }
+        // Sort by date descending
+        state.reports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        saveState();
+        refreshUI();
+      }
+    }
+  } catch {}
+}
+
+// Upload logo to KV on first setup
+async function uploadLogoToKV() {
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+  try {
+    // Check if logo is already stored
+    const check = await fetch('/api/logo', {
+      headers: { 'X-Admin-Password': password },
+    });
+    const checkData = await check.json();
+    if (checkData.hasLogo) return; // Already uploaded
+
+    // Fetch the logo from the static file
+    const logoResp = await fetch('/logo.png');
+    if (!logoResp.ok) return;
+    const blob = await logoResp.blob();
+
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(',')[1]; // Remove data:... prefix
+      await fetch('/api/logo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Password': password,
+        },
+        body: JSON.stringify({ base64 }),
+      });
+    };
+    reader.readAsDataURL(blob);
+  } catch {}
+}
+
+// ══════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════
+function esc(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+function openModal(id) { document.getElementById('modal-' + id).classList.add('active'); }
+function closeModal(id) { document.getElementById('modal-' + id).classList.remove('active'); }
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('active');
+  setTimeout(() => t.classList.remove('active'), 3000);
+}
+
+// Close modals on backdrop click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.classList.remove('active');
+  });
+});
+
+// Check for auto-login (session)
+if (localStorage.getItem('citadel_authed') === 'true') {
+  // For convenience during dev — remove in production
+}
+</script>
+</body>
+</html>

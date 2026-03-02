@@ -1,0 +1,12 @@
+{
+  "name": "citadel-dashboard",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx wrangler pages dev public --kv CITADEL_KV --port 8788",
+    "deploy": "npx wrangler pages deploy public --project-name citadel-dashboard"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

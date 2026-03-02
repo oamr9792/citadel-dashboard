@@ -1,0 +1,9 @@
+# Citadel Dashboard v2 — Cloudflare Pages + Functions
+# ====================================================
+name = "citadel-dashboard"
+compatibility_date = "2024-12-01"
+
+# KV Namespace — create in Cloudflare dashboard, paste ID below
+[[kv_namespaces]]
+binding = "CITADEL_KV"
+id = "PASTE_YOUR_KV_NAMESPACE_ID_HERE"
