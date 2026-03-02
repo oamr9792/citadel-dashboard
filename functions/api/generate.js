@@ -30,9 +30,8 @@ export async function onRequestPost(context) {
       try { const p = await env.CITADEL_KV.get(`report-html:${previousReportId}`); if (p) dataPayload += `\n=== PREVIOUS REPORT ===\n${p.substring(0, 20000)}\n`; } catch {}
     }
 
-    // Get logo from KV
-    let logoDataUri = "";
-    try { const s = await env.CITADEL_KV.get("logo-base64"); if (s) logoDataUri = `data:image/jpeg;base64,${s}`; } catch {}
+    // Get logo - use hosted URL (much more reliable than base64 in KV)
+    const logoDataUri = "https://citadel-dashboard.pages.dev/logo.png";
 
     const systemPrompt = getSystemPrompt(type, logoDataUri);
     const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nIMPORTANT INSTRUCTIONS:\n- Generate the COMPLETE, COMPREHENSIVE HTML report with ALL sections fully populated with real data analysis.\n- Every section must contain detailed analysis — NOT placeholder text, NOT "data unavailable" messages.\n- Parse and analyze ALL the CSV/JSON data provided above. Extract real numbers, real URLs, real rankings.\n- The report MUST include real computed metrics: ownership percentages, sentiment distributions, movement analysis.\n- Tables must be fully populated with actual data rows from the sheet.\n- Do NOT abbreviate, summarize briefly, or skip sections. This is a premium client-facing deliverable.\n- The HTML output should be 15,000-40,000 characters minimum for a thorough report.\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
@@ -171,7 +170,7 @@ function json(data,status=200) { return new Response(JSON.stringify(data),{statu
 
 function getSystemPrompt(type, logoDataUri) {
   const logoInstruction = logoDataUri
-    ? `The Reputation Citadel logo data URI is: ${logoDataUri}\nUse this exact string as the src attribute of the logo <img> tag in the report header. Do NOT generate or fabricate a base64 string — use this exact value provided here.`
+    ? `The Reputation Citadel logo URL is: ${logoDataUri}\nUse this exact URL as the src attribute of the logo <img> tag in the report header. Example: <img src="${logoDataUri}" alt="Reputation Citadel" style="height:50px">`
     : `Use text "Reputation Citadel" in white where the logo would go.`;
 
   if (type === "serp") return getSerpPrompt(logoInstruction);
