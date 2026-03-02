@@ -62,16 +62,53 @@ export async function onRequestPost(context) {
 async function fetchGoogleSheet(sheetUrl) {
   const m = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/); if (!m) return null;
   const id = m[1], tabs = {};
+  
+  // Try multiple URL formats — different sheets need different approaches
+  const urlFormats = [
+    (gid) => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`,
+    (gid) => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`,
+  ];
+
   for (const gid of ["0","1","2","3"]) {
-    try {
-      const r = await fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`, { headers: {"User-Agent":"Mozilla/5.0"}, redirect:"follow" });
-      if (r.ok) { const csv = await r.text(); if (csv && csv.trim().length > 10) {
-        const fl = csv.split("\n")[0].toLowerCase(); let tn = `Tab_gid${gid}`;
-        if (fl.includes("rank")||fl.includes("serp")||fl.includes("keyword")) tn = `SERP_Tracker_gid${gid}`;
-        else if (fl.includes("content")||fl.includes("live url")||fl.includes("created")) tn = `Content_Created_gid${gid}`;
-        tabs[tn] = csv;
-      }}
-    } catch {}
+    for (const urlFn of urlFormats) {
+      try {
+        const r = await fetch(urlFn(gid), { headers: {"User-Agent":"Mozilla/5.0"}, redirect:"follow" });
+        if (r.ok) {
+          const csv = await r.text();
+          if (csv && csv.trim().length > 50 && !csv.includes("<!DOCTYPE")) {
+            const fl = csv.split("\n")[0].toLowerCase(); let tn = `Tab_gid${gid}`;
+            if (fl.includes("rank")||fl.includes("serp")||fl.includes("keyword")||fl.includes("snapshot")) tn = `SERP_Tracker_gid${gid}`;
+            else if (fl.includes("content")||fl.includes("live url")||fl.includes("created")) tn = `Content_Created_gid${gid}`;
+            
+            // If sheet is very large (>200 rows), only send the most recent snapshot
+            const lines = csv.split("\n");
+            if (lines.length > 200) {
+              const header = lines[0];
+              // Find the most recent date by checking the first column
+              const dates = new Set();
+              for (let i = 1; i < lines.length; i++) {
+                const firstCol = lines[i].split(",")[0].replace(/"/g, "").trim();
+                if (firstCol && firstCol.match(/\d/)) dates.add(firstCol);
+              }
+              const sortedDates = Array.from(dates).sort((a, b) => new Date(b) - new Date(a));
+              const recentDate = sortedDates[0];
+              const prevDate = sortedDates[1] || null;
+              
+              // Filter to most recent + previous date for trend analysis
+              const filtered = [header];
+              for (let i = 1; i < lines.length; i++) {
+                const firstCol = lines[i].split(",")[0].replace(/"/g, "").trim();
+                if (firstCol === recentDate || firstCol === prevDate) filtered.push(lines[i]);
+              }
+              tabs[tn] = filtered.join("\n");
+            } else {
+              tabs[tn] = csv;
+            }
+            break; // This URL format worked, skip alternatives
+          }
+        }
+      } catch {}
+    }
   }
   if (!Object.keys(tabs).length) return null;
   let out = ""; for (const [n,c] of Object.entries(tabs)) out += `\n--- Sheet Tab: ${n} (${c.split("\n").length} rows) ---\n${c}\n`;
