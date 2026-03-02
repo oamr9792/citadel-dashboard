@@ -1,521 +1,1073 @@
-// functions/api/generate.js — Phase 2 FINAL with complete project prompts
+// ============================================================================
+// REPUTATION CITADEL — generate.js
+// Cloudflare Pages Function: /functions/api/generate.js
+// Handles: SERP, LLM, Social Media, Executive Summary report generation
+// ============================================================================
 
-export async function onRequestPost(context) {
-  const { request, env } = context;
-  const authHeader = request.headers.get("X-Admin-Password");
-  if (authHeader !== env.ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+// ─── SHARED HTML TEMPLATE ────────────────────────────────────────────────────
+// All 4 report types use this identical structure with [PLACEHOLDERS]
 
-  let body;
-  try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
-  const { clientId, clientName, type, keywords, sheetUrl, previousReportId, linkedReports } = body;
-  if (!clientId || !clientName || !type) return json({ error: "Missing required fields" }, 400);
+const HTML_TEMPLATE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[REPORT_TITLE] — [CLIENT_NAME] | Reputation Citadel</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap');
+  :root {
+    --rc-ink: #0f1419;
+    --rc-paper: #ffffff;
+    --rc-slate: #536471;
+    --rc-border: #e1e4e8;
+    --rc-accent: #1d4ed8;
+    --rc-accent-light: #eff6ff;
+    --rc-green: #059669;
+    --rc-green-light: #ecfdf5;
+    --rc-amber: #d97706;
+    --rc-amber-light: #fffbeb;
+    --rc-red: #dc2626;
+    --rc-red-light: #fef2f2;
+    --rc-surface: #f8fafc;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'DM Sans', -apple-system, sans-serif;
+    color: var(--rc-ink);
+    background: var(--rc-surface);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .rc-report { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+  /* Header */
+  .rc-header {
+    display: flex; align-items: center; gap: 20px;
+    padding-bottom: 32px; margin-bottom: 40px;
+    border-bottom: 2px solid var(--rc-ink);
+  }
+  .rc-logo { height: 48px; width: auto; }
+  .rc-header-text h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px; font-weight: 400; line-height: 1.2;
+  }
+  .rc-header-text .rc-subtitle {
+    font-size: 14px; color: var(--rc-slate); margin-top: 4px;
+  }
+  /* Metadata strip */
+  .rc-meta {
+    display: flex; flex-wrap: wrap; gap: 24px;
+    padding: 16px 0; margin-bottom: 32px;
+    border-bottom: 1px solid var(--rc-border);
+    font-size: 13px; color: var(--rc-slate);
+  }
+  .rc-meta strong { color: var(--rc-ink); font-weight: 500; }
+  /* Section blocks */
+  .rc-section { margin-bottom: 36px; }
+  .rc-section-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px; font-weight: 400;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--rc-border);
+  }
+  .rc-section p { margin-bottom: 12px; color: #1a1a1a; }
+  /* Risk levels — plain language badges */
+  .rc-risk {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 6px;
+    font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+  }
+  .rc-risk::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+  }
+  .rc-risk--low { background: var(--rc-green-light); color: var(--rc-green); }
+  .rc-risk--low::before { background: var(--rc-green); }
+  .rc-risk--moderate { background: var(--rc-amber-light); color: var(--rc-amber); }
+  .rc-risk--moderate::before { background: var(--rc-amber); }
+  .rc-risk--elevated { background: var(--rc-red-light); color: var(--rc-red); }
+  .rc-risk--elevated::before { background: var(--rc-red); }
+  /* Data tables */
+  .rc-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  .rc-table th {
+    text-align: left; padding: 10px 12px;
+    background: var(--rc-surface); border-bottom: 2px solid var(--rc-border);
+    font-weight: 600; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--rc-slate);
+  }
+  .rc-table td {
+    padding: 10px 12px; border-bottom: 1px solid var(--rc-border);
+    vertical-align: top;
+  }
+  .rc-table tr:last-child td { border-bottom: none; }
+  /* Action items — "We will..." framing */
+  .rc-actions {
+    background: var(--rc-accent-light);
+    border-left: 4px solid var(--rc-accent);
+    padding: 20px 24px; border-radius: 0 8px 8px 0;
+    margin: 24px 0;
+  }
+  .rc-actions h3 {
+    font-size: 15px; font-weight: 700; color: var(--rc-accent);
+    margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .rc-actions ol {
+    padding-left: 20px; counter-reset: action;
+    list-style: none;
+  }
+  .rc-actions li {
+    position: relative; padding: 6px 0 6px 8px;
+    counter-increment: action;
+    font-size: 14px; line-height: 1.6;
+  }
+  .rc-actions li::before {
+    content: counter(action) '.';
+    position: absolute; left: -20px;
+    font-weight: 700; color: var(--rc-accent);
+  }
+  /* Trend indicators */
+  .rc-trend-up { color: var(--rc-green); }
+  .rc-trend-down { color: var(--rc-red); }
+  .rc-trend-flat { color: var(--rc-slate); }
+  /* Cross-links */
+  .rc-crosslinks {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    padding-top: 24px; margin-top: 40px;
+    border-top: 1px solid var(--rc-border);
+  }
+  .rc-crosslink {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 6px;
+    background: var(--rc-surface); border: 1px solid var(--rc-border);
+    color: var(--rc-accent); text-decoration: none;
+    font-size: 13px; font-weight: 500;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .rc-crosslink:hover { background: var(--rc-accent-light); border-color: var(--rc-accent); }
+  /* Footer */
+  .rc-footer {
+    margin-top: 48px; padding-top: 24px;
+    border-top: 2px solid var(--rc-ink);
+    font-size: 12px; color: var(--rc-slate);
+    display: flex; justify-content: space-between;
+  }
+  /* Responsive */
+  @media (max-width: 640px) {
+    .rc-header { flex-direction: column; align-items: flex-start; }
+    .rc-header-text h1 { font-size: 22px; }
+    .rc-meta { flex-direction: column; gap: 8px; }
+    .rc-table { font-size: 12px; }
+    .rc-table th, .rc-table td { padding: 8px 6px; }
+  }
+  @media print {
+    body { background: white; }
+    .rc-report { padding: 0; }
+    .rc-crosslinks { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="rc-report">
+  <header class="rc-header">
+    <img src="https://citadel-dashboard.pages.dev/logo.png" alt="Reputation Citadel" class="rc-logo" />
+    <div class="rc-header-text">
+      <h1>[REPORT_TITLE]</h1>
+      <div class="rc-subtitle">[CLIENT_NAME] — [REPORT_PERIOD]</div>
+    </div>
+  </header>
+  <div class="rc-meta">
+    <span><strong>Client:</strong> [CLIENT_NAME]</span>
+    <span><strong>Period:</strong> [REPORT_PERIOD]</span>
+    <span><strong>Generated:</strong> [GENERATED_DATE]</span>
+    <span><strong>Report Type:</strong> [REPORT_TYPE_LABEL]</span>
+  </div>
+  [REPORT_BODY]
+  [CROSS_LINKS]
+  <footer class="rc-footer">
+    <span>Reputation Citadel — Confidential</span>
+    <span>Generated [GENERATED_DATE]</span>
+  </footer>
+</div>
+</body>
+</html>`;
 
+
+// ─── UTILITY HELPERS ─────────────────────────────────────────────────────────
+
+function getReportPeriod() {
+  const now = new Date();
+  const currentMonth = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  return currentMonth;
+}
+
+function getPreviousMonth() {
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return prev.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function getMonthKey(dateStr) {
+  // Returns YYYY-MM from various date formats
   try {
-    const typeNames = { serp: "SERP & ORM Analysis", social: "Social Media Intelligence", llm: "LLM Reputation Intelligence", executive: "Executive Summary" };
-    let dataPayload = "";
-    const reportDate = new Date().toISOString().split("T")[0];
-
-    if ((type === "serp" || type === "executive") && sheetUrl) {
-      const sheetData = await fetchGoogleSheet(sheetUrl);
-      dataPayload += sheetData ? `\n=== GOOGLE SHEET DATA ===\n${sheetData}\n` : `\n=== GOOGLE SHEET DATA ===\nUnable to fetch sheet.\n`;
-    }
-    if ((type === "llm" || type === "executive") && env.DATAFORSEO_LOGIN && env.DATAFORSEO_PASSWORD && keywords) {
-      const llmData = await fetchLLMResponses(keywords, clientName, env.DATAFORSEO_LOGIN, env.DATAFORSEO_PASSWORD);
-      dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(llmData, null, 2)}\n`;
-    }
-    if (type === "social" || type === "executive") {
-      dataPayload += `\n=== SOCIAL MEDIA ANALYSIS REQUEST ===\nClient: ${clientName}\nKeywords: ${keywords || "N/A"}\nAnalyze social media presence and sentiment for this client.\n`;
-    }
-    
-    // Add linked report URLs for executive summary
-    if (type === "executive" && linkedReports) {
-      const baseUrl = new URL(request.url).origin;
-      let links = "\n=== LINKED REPORTS ===\n";
-      links += "The following individual reports have been generated for this client. Include clickable links to each in the relevant section of the executive summary.\n";
-      if (linkedReports.serp) links += `SERP Report URL: ${baseUrl}/share/${linkedReports.serp.shareToken}\n`;
-      if (linkedReports.llm) links += `LLM Report URL: ${baseUrl}/share/${linkedReports.llm.shareToken}\n`;
-      if (linkedReports.social) links += `Social Media Report URL: ${baseUrl}/share/${linkedReports.social.shareToken}\n`;
-      links += "For each section (SERP Snapshot, LLM Snapshot, Social Media Snapshot), add a styled link/button that says 'View Full Report →' linking to the corresponding URL above.\n";
-      dataPayload += links;
-    }
-    if (previousReportId) {
-      try { const p = await env.CITADEL_KV.get(`report-html:${previousReportId}`); if (p) dataPayload += `\n=== PREVIOUS REPORT ===\n${p.substring(0, 20000)}\n`; } catch {}
-    }
-
-    // Get logo - use hosted URL (much more reliable than base64 in KV)
-    const logoDataUri = "https://citadel-dashboard.pages.dev/logo.png";
-
-    const systemPrompt = getSystemPrompt(type, logoDataUri);
-    const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nIMPORTANT INSTRUCTIONS:\n- Generate the COMPLETE, COMPREHENSIVE HTML report with ALL sections fully populated with real data analysis.\n- Every section must contain detailed analysis — NOT placeholder text, NOT "data unavailable" messages.\n- Parse and analyze ALL the CSV/JSON data provided above. Extract real numbers, real URLs, real rankings.\n- The report MUST include real computed metrics: ownership percentages, sentiment distributions, movement analysis.\n- Tables must be fully populated with actual data rows from the sheet.\n- Do NOT abbreviate, summarize briefly, or skip sections. This is a premium client-facing deliverable.\n- The HTML output should be 15,000-40,000 characters minimum for a thorough report.\n- REPORTING PERIOD: If only one date/snapshot of data is provided, this is the FIRST report — present it as a baseline snapshot of the current state of search results. The period should be labeled as the snapshot date only (e.g., "March 1, 2026").\n- If TWO dates/snapshots are provided, this is a MONTHLY report — compare the current snapshot against the previous month's snapshot. Label the period as "Previous Date — Current Date" and include full trend analysis showing what improved, worsened, or stayed the same.\n- Reports are produced monthly, typically on the 1st of each month.\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
-
-    if (!env.ANTHROPIC_API_KEY) return json({ error: "Anthropic API key not configured." }, 400);
-
-    let reportHtml = await callClaudeStreaming(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
-    reportHtml = reportHtml.trim();
-    if (reportHtml.startsWith("```")) reportHtml = reportHtml.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
-
-    const shareToken = genToken();
-    const reportId = `r_${Date.now()}`;
-    const meta = { id: reportId, clientId, clientName, type, typeName: typeNames[type] || type, keywords: keywords || "", sheetUrl: sheetUrl || "", createdAt: new Date().toISOString(), shareToken, status: "complete" };
-
-    await env.CITADEL_KV.put(`report-html:${reportId}`, reportHtml, { expirationTtl: 31536000 });
-    await env.CITADEL_KV.put(`report:${reportId}`, JSON.stringify(meta), { expirationTtl: 31536000 });
-    await env.CITADEL_KV.put(`share:${shareToken}`, reportId, { expirationTtl: 31536000 });
-    let idx = []; try { const e = await env.CITADEL_KV.get("reports-index"); if (e) idx = JSON.parse(e); } catch {}
-    idx.unshift(meta);
-    await env.CITADEL_KV.put("reports-index", JSON.stringify(idx));
-
-    return json({ success: true, report: meta });
-  } catch (err) { return json({ error: `Generation failed: ${err.message}` }, 500); }
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return null;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  } catch { return null; }
 }
 
-// ── Google Sheets ──
-async function fetchGoogleSheet(sheetUrl) {
-  const m = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/); if (!m) return null;
-  const id = m[1], tabs = {};
-  
-  // Try multiple URL formats — different sheets need different approaches
-  const urlFormats = [
-    (gid) => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`,
-    (gid) => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`,
-  ];
-
-  for (const gid of ["0","1","2","3"]) {
-    for (const urlFn of urlFormats) {
-      try {
-        const r = await fetch(urlFn(gid), { headers: {"User-Agent":"Mozilla/5.0"}, redirect:"follow" });
-        if (r.ok) {
-          const csv = await r.text();
-          if (csv && csv.trim().length > 50 && !csv.includes("<!DOCTYPE")) {
-            const fl = csv.split("\n")[0].toLowerCase(); let tn = `Tab_gid${gid}`;
-            if (fl.includes("rank")||fl.includes("serp")||fl.includes("keyword")||fl.includes("snapshot")) tn = `SERP_Tracker_gid${gid}`;
-            else if (fl.includes("content")||fl.includes("live url")||fl.includes("created")) tn = `Content_Created_gid${gid}`;
-            
-            // If sheet is very large (>200 rows), filter intelligently
-            const lines = csv.split("\n");
-            if (lines.length > 200) {
-              const header = lines[0];
-              // Collect all dates
-              const dateRows = {};
-              for (let i = 1; i < lines.length; i++) {
-                const firstCol = lines[i].split(",")[0].replace(/"/g, "").trim();
-                if (firstCol && firstCol.match(/\d/)) {
-                  if (!dateRows[firstCol]) dateRows[firstCol] = [];
-                  dateRows[firstCol].push(lines[i]);
-                }
-              }
-              
-              // Sort dates newest first
-              const sortedDates = Object.keys(dateRows).sort((a, b) => new Date(b) - new Date(a));
-              const latestDate = sortedDates[0];
-              const latestMonth = new Date(latestDate).getMonth();
-              const latestYear = new Date(latestDate).getFullYear();
-              
-              // Find the most recent snapshot from the PREVIOUS month for comparison
-              let prevMonthDate = null;
-              for (const d of sortedDates) {
-                const dt = new Date(d);
-                if (dt.getMonth() !== latestMonth || dt.getFullYear() !== latestYear) {
-                  prevMonthDate = d;
-                  break;
-                }
-              }
-              
-              // Build filtered CSV: latest snapshot + previous month snapshot (if exists)
-              const filtered = [header];
-              // Add all rows from the latest date
-              if (dateRows[latestDate]) filtered.push(...dateRows[latestDate]);
-              // Add previous month rows for trend comparison
-              if (prevMonthDate && dateRows[prevMonthDate]) filtered.push(...dateRows[prevMonthDate]);
-              
-              tabs[tn] = filtered.join("\n");
-            } else {
-              tabs[tn] = csv;
-            }
-            break; // This URL format worked, skip alternatives
-          }
-        }
-      } catch {}
-    }
-  }
-  if (!Object.keys(tabs).length) return null;
-  let out = ""; for (const [n,c] of Object.entries(tabs)) out += `\n--- Sheet Tab: ${n} (${c.split("\n").length} rows) ---\n${c}\n`;
-  return out;
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// ── DataForSEO ──
-async function fetchLLMResponses(keywords, clientName, login, password) {
-  const auth = btoa(`${login}:${password}`);
-  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+function previousMonthKey() {
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+}
 
-  // Build reputation-relevant queries
-  const queries = [];
-  for (const kw of kws.slice(0, 2)) {
-    queries.push(`Who is ${kw}?`);
-    queries.push(`What do you know about ${kw}?`);
-    queries.push(`${kw} reputation`);
-    queries.push(`${kw} reviews`);
-  }
-  const uniqueQueries = [...new Set(queries)];
+function riskBadge(level) {
+  // Plain language risk — not "10/15" weighted scores
+  const map = {
+    low: '<span class="rc-risk rc-risk--low">Low Risk — Stable</span>',
+    moderate: '<span class="rc-risk rc-risk--moderate">Moderate Risk — Monitor Closely</span>',
+    elevated: '<span class="rc-risk rc-risk--elevated">Elevated Risk — Immediate Action Needed</span>',
+  };
+  return map[level] || map.moderate;
+}
 
-  const results = { chatgpt: [], gemini: [], claude: [], perplexity: [] };
-  const platforms = [
-    { key: "chatgpt", path: "chat_gpt", model: "gpt-4o-mini" },
-    { key: "gemini", path: "gemini", model: "gemini-2.0-flash" },
-    { key: "claude", path: "claude", model: "claude-sonnet-4-20250514" },
-    { key: "perplexity", path: "perplexity", model: "sonar" },
+function buildCrossLinks(reportType, clientName, baseUrl) {
+  const types = [
+    { key: 'serp', label: 'SERP & ORM Report', icon: '🔍' },
+    { key: 'llm', label: 'LLM Intelligence Report', icon: '🤖' },
+    { key: 'social', label: 'Social Media Report', icon: '📱' },
+    { key: 'executive', label: 'Executive Summary', icon: '📊' },
   ];
+  const links = types
+    .filter(t => t.key !== reportType)
+    .map(t => {
+      const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const dateSlug = new Date().toISOString().slice(0, 7);
+      return `<a class="rc-crosslink" href="${baseUrl}/reports/${slug}/${dateSlug}-${t.key}.html">${t.icon} ${t.label}</a>`;
+    })
+    .join('\n    ');
+  return `<div class="rc-crosslinks">\n    ${links}\n  </div>`;
+}
 
-  // Send up to 3 queries per platform
-  for (const p of platforms) {
-    for (const q of uniqueQueries.slice(0, 3)) {
-      try {
-        const r = await fetch(`https://api.dataforseo.com/v3/ai_optimization/${p.path}/llm_responses/live`, {
-          method: "POST",
-          headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-          body: JSON.stringify([{ user_prompt: q, model_name: p.model, max_output_tokens: 1000, web_search: true }]),
-        });
-        if (r.ok) {
-          const d = await r.json();
-          const t = d?.tasks?.[0];
-          if (t?.status_code === 20000 && t?.result) {
-            for (const x of t.result) {
-              // Extract text from items->sections structure
-              let responseText = "";
-              let annotations = [];
-              if (x.items && x.items.length > 0) {
-                for (const item of x.items) {
-                  if (item.sections) {
-                    for (const sec of item.sections) {
-                      if (sec.text) responseText += sec.text + "\n";
-                      if (sec.annotations) annotations.push(...sec.annotations);
-                    }
-                  }
-                }
+function fillTemplate(replacements) {
+  let html = HTML_TEMPLATE;
+  for (const [key, value] of Object.entries(replacements)) {
+    html = html.replaceAll(`[${key}]`, value);
+  }
+  return html;
+}
+
+
+// ─── GOOGLE SHEETS (gviz/tq CSV) ────────────────────────────────────────────
+
+async function fetchSheetData(sheetUrl) {
+  // Convert share URL → gviz CSV export
+  let sheetId;
+  const match = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (match) sheetId = match[1];
+  else throw new Error('Invalid Google Sheet URL');
+
+  const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`;
+  const resp = await fetch(gvizUrl);
+  if (!resp.ok) throw new Error(`Sheet fetch failed: ${resp.status}`);
+  const csvText = await resp.text();
+  return parseCSV(csvText);
+}
+
+function parseCSV(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return { headers: [], rows: [], latest: [], previous: [] };
+
+  const headers = parseCSVLine(lines[0]);
+  const rows = lines.slice(1).map(parseCSVLine);
+
+  // Filter to latest month and previous month
+  const dateColIdx = headers.findIndex(h =>
+    /date|timestamp|month|period/i.test(h)
+  );
+
+  const curKey = currentMonthKey();
+  const prevKey = previousMonthKey();
+
+  let latest = rows;
+  let previous = [];
+
+  if (dateColIdx >= 0) {
+    latest = rows.filter(r => {
+      const mk = getMonthKey(r[dateColIdx]);
+      return mk === curKey;
+    });
+    previous = rows.filter(r => {
+      const mk = getMonthKey(r[dateColIdx]);
+      return mk === prevKey;
+    });
+    // If no current month data, use most recent available
+    if (latest.length === 0) {
+      const allMonths = [...new Set(rows.map(r => getMonthKey(r[dateColIdx])).filter(Boolean))].sort().reverse();
+      if (allMonths.length >= 1) {
+        latest = rows.filter(r => getMonthKey(r[dateColIdx]) === allMonths[0]);
+        previous = allMonths.length >= 2
+          ? rows.filter(r => getMonthKey(r[dateColIdx]) === allMonths[1])
+          : [];
+      }
+    }
+  }
+
+  return { headers, rows, latest, previous };
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') inQuotes = false;
+      else current += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ',') { result.push(current.trim()); current = ''; }
+      else current += ch;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function sheetDataToMarkdown(headers, rows) {
+  if (!rows.length) return '_No data available for this period._';
+  let md = '| ' + headers.join(' | ') + ' |\n';
+  md += '| ' + headers.map(() => '---').join(' | ') + ' |\n';
+  for (const row of rows.slice(0, 50)) { // cap at 50 rows
+    md += '| ' + row.join(' | ') + ' |\n';
+  }
+  return md;
+}
+
+
+// ─── DATAFORSEO: LLM RESPONSES ──────────────────────────────────────────────
+
+async function fetchDataForSEO_LLM(keywords, dfLogin, dfPassword) {
+  const auth = btoa(`${dfLogin}:${dfPassword}`);
+  const llms = ['chat_gpt', 'gemini', 'perplexity'];
+  const results = {};
+
+  for (const llm of llms) {
+    const prompt = `What do you know about ${keywords}? Provide a comprehensive overview including reputation, reviews, controversies, and public perception.`;
+    const payload = [{
+      user_prompt: prompt,
+      model_name: llm === 'chat_gpt' ? 'gpt-4.1-mini' : llm === 'gemini' ? 'gemini-2.5-flash' : 'sonar-reasoning',
+      web_search: true,
+      temperature: 0.3,
+      max_output_tokens: 1024
+    }];
+
+    try {
+      const resp = await fetch(
+        `https://api.dataforseo.com/v3/ai_optimization/${llm}/llm_responses/live`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        }
+      );
+      const data = await resp.json();
+
+      // Parse items → sections → text
+      let fullText = '';
+      const task = data?.tasks?.[0];
+      if (task?.status_code === 20000 && task?.result?.[0]?.items) {
+        for (const item of task.result[0].items) {
+          if (item.sections) {
+            for (const section of item.sections) {
+              if (section.type === 'text' && section.text) {
+                fullText += section.text + '\n\n';
               }
-              if (!responseText) responseText = x.response_text || x.text || "";
-              results[p.key].push({ query: q, response_text: responseText, fan_out_queries: x.fan_out_queries || [], annotations: annotations.length ? annotations : (x.annotations || x.citations || x.references || []), model: p.model });
             }
-          } else if (t) {
-            results[p.key].push({ query: q, response_text: t.status_message || "No response", fan_out_queries: [], citations: [], model: p.model, status: t.status_code });
           }
         }
-      } catch (e) { results[p.key].push({ query: q, error: e.message, model: p.model }); }
-      await new Promise(r => setTimeout(r, 500));
+      }
+      const modelUsed = task?.result?.[0]?.model_name || llm;
+      results[llm] = { text: fullText.trim(), model: modelUsed };
+    } catch (err) {
+      results[llm] = { text: `Error querying ${llm}: ${err.message}`, model: llm };
     }
   }
   return results;
 }
 
-// ── Claude Streaming ──
-async function callClaudeStreaming(apiKey, systemPrompt, userPrompt) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST",
-    headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
-    body: JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:64000,stream:true,system:systemPrompt,messages:[{role:"user",content:userPrompt}]})
+
+// ─── XPOZ: SOCIAL MEDIA DATA ────────────────────────────────────────────────
+
+async function fetchXpozSocialData(clientName, xpozApiKey) {
+  const baseUrl = 'https://mcp.xpoz.ai';
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${xpozApiKey}`
+  };
+
+  const socialData = { twitter: null, reddit: null, instagram: null };
+
+  // Twitter — search posts by keywords
+  try {
+    const twitterResp = await fetch(`${baseUrl}/api/twitter/posts/search`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: clientName,
+        responseType: 'fast',
+        fields: ['id', 'text', 'authorUsername', 'createdAtDate', 'likeCount', 'retweetCount', 'replyCount']
+      })
+    });
+    if (twitterResp.ok) {
+      socialData.twitter = await twitterResp.json();
+    }
+  } catch (e) {
+    socialData.twitter = { error: e.message };
+  }
+
+  // Reddit — search posts by keywords
+  try {
+    const redditResp = await fetch(`${baseUrl}/api/reddit/posts/search`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: clientName,
+        responseType: 'fast',
+        fields: ['id', 'title', 'selftext', 'authorUsername', 'subredditName', 'createdAtDate', 'score', 'commentsCount']
+      })
+    });
+    if (redditResp.ok) {
+      socialData.reddit = await redditResp.json();
+    }
+  } catch (e) {
+    socialData.reddit = { error: e.message };
+  }
+
+  // Instagram — search posts by keywords
+  try {
+    const igResp = await fetch(`${baseUrl}/api/instagram/posts/search`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: clientName,
+        responseType: 'fast',
+        fields: ['id', 'caption', 'username', 'createdAtDate', 'likeCount', 'commentCount']
+      })
+    });
+    if (igResp.ok) {
+      socialData.instagram = await igResp.json();
+    }
+  } catch (e) {
+    socialData.instagram = { error: e.message };
+  }
+
+  return socialData;
+}
+
+// Alternative: Use Xpoz MCP tools directly (for Claude-in-the-loop)
+function formatSocialDataForPrompt(socialData) {
+  let prompt = '';
+
+  if (socialData.twitter?.results?.length) {
+    prompt += '\n\n### Twitter/X Data:\n';
+    for (const t of socialData.twitter.results.slice(0, 30)) {
+      prompt += `- @${t.authorUsername} (${t.createdAtDate}): "${t.text?.slice(0, 200)}..." [❤️${t.likeCount || 0} 🔁${t.retweetCount || 0} 💬${t.replyCount || 0}]\n`;
+    }
+  } else {
+    prompt += '\n\n### Twitter/X Data:\nNo recent Twitter posts found for this entity.\n';
+  }
+
+  if (socialData.reddit?.results?.length) {
+    prompt += '\n\n### Reddit Data:\n';
+    for (const r of socialData.reddit.results.slice(0, 20)) {
+      prompt += `- r/${r.subredditName} by u/${r.authorUsername} (${r.createdAtDate}): "${r.title}" [⬆️${r.score || 0} 💬${r.commentsCount || 0}]\n`;
+      if (r.selftext) prompt += `  Content preview: "${r.selftext?.slice(0, 150)}..."\n`;
+    }
+  } else {
+    prompt += '\n\n### Reddit Data:\nNo recent Reddit posts found for this entity.\n';
+  }
+
+  if (socialData.instagram?.results?.length) {
+    prompt += '\n\n### Instagram Data:\n';
+    for (const ig of socialData.instagram.results.slice(0, 20)) {
+      prompt += `- @${ig.username} (${ig.createdAtDate}): "${ig.caption?.slice(0, 200)}..." [❤️${ig.likeCount || 0} 💬${ig.commentCount || 0}]\n`;
+    }
+  } else {
+    prompt += '\n\n### Instagram Data:\nNo recent Instagram posts found for this entity.\n';
+  }
+
+  return prompt;
+}
+
+
+// ─── CLAUDE STREAMING (SONNET, 64K) ─────────────────────────────────────────
+
+async function streamClaude(systemPrompt, userPrompt, anthropicKey) {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': anthropicKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 64000,
+      stream: true,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    })
   });
-  if (!r.ok) { const e = await r.text(); throw new Error(`Claude API ${r.status}: ${e}`); }
-  const reader = r.body.getReader(), dec = new TextDecoder();
-  let txt="", buf="";
-  while(true) {
-    const {done,value} = await reader.read(); if (done) break;
-    buf += dec.decode(value,{stream:true});
-    const lines = buf.split("\n"); buf = lines.pop()||"";
-    for (const ln of lines) {
-      if (ln.startsWith("data: ")) {
-        const d = ln.slice(6).trim(); if (d==="[DONE]") continue;
-        try { const p = JSON.parse(d); if (p.type==="content_block_delta"&&p.delta?.type==="text_delta") txt += p.delta.text; } catch {}
-      }
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Claude API ${resp.status}: ${errText}`);
+  }
+
+  return resp.body; // Return ReadableStream for SSE forwarding
+}
+
+// Non-streaming variant for when we need full text
+async function callClaude(systemPrompt, userPrompt, anthropicKey) {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': anthropicKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 64000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
+    })
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Claude API ${resp.status}: ${errText}`);
+  }
+
+  const data = await resp.json();
+  return data.content.map(b => b.text || '').join('');
+}
+
+
+// ─── REPORT SYSTEM PROMPTS ──────────────────────────────────────────────────
+
+const SYSTEM_PROMPTS = {
+  serp: `You are the Reputation Citadel report engine generating a SERP & ORM Analysis report.
+
+OUTPUT FORMAT: Return ONLY the HTML body content (no <html>, <head>, <body> tags). Use these CSS classes:
+- .rc-section wrapping each section, .rc-section-title for headings
+- .rc-table, th, td for data tables
+- .rc-risk .rc-risk--low / .rc-risk--moderate / .rc-risk--elevated for risk badges (plain language: "Low Risk — Stable", "Moderate Risk — Monitor Closely", "Elevated Risk — Immediate Action Needed"). NEVER use weighted numeric scores like "10/15".
+- .rc-actions with <ol> for action items. Each <li> MUST start with "We will..." (not recommendations — commitments)
+- .rc-trend-up, .rc-trend-down, .rc-trend-flat for directional indicators
+
+REPORT STRUCTURE:
+1. Executive Overview (2-3 paragraphs)
+2. SERP Landscape Analysis (table of keyword rankings with trends)
+3. Search Engine Results Composition (owned vs third-party vs negative)
+4. Reputation Risk Assessment (plain language risk level + explanation)
+5. Month-over-Month Changes (if previous data exists, compare; if baseline, state "Baseline month — future reports will track changes")
+6. Action Items (5-7 items, each starting with "We will...")
+
+Be data-driven. Reference specific numbers from the Google Sheets data. Be direct and professional.`,
+
+  llm: `You are the Reputation Citadel report engine generating an LLM Reputation Intelligence report.
+
+OUTPUT FORMAT: Return ONLY the HTML body content. Use the same CSS classes as all Citadel reports:
+- .rc-section, .rc-section-title, .rc-table, .rc-risk, .rc-actions
+- Risk levels in plain language only (Low/Moderate/Elevated + description). NO numeric scores.
+- Action items with "We will..." framing
+
+REPORT STRUCTURE:
+1. Executive Overview — How LLMs currently represent this entity
+2. LLM Response Analysis by Platform (ChatGPT, Gemini, Perplexity) — summarize what each says, noting tone, accuracy, and any concerns
+3. Sentiment & Accuracy Assessment — Are the LLM responses accurate? Favorable? Concerning?
+4. Key Themes & Narratives — What themes dominate LLM responses?
+5. Risk Assessment — Plain language (not numeric)
+6. Month-over-Month Changes (or "Baseline month" if first report)
+7. Action Items (5-7 "We will..." commitments for improving LLM representation)
+
+Analyze the actual LLM response data provided. Be specific about what each LLM says.`,
+
+  social: `You are the Reputation Citadel report engine generating a Social Media Intelligence report.
+
+OUTPUT FORMAT: Return ONLY the HTML body content. Use identical CSS classes:
+- .rc-section, .rc-section-title, .rc-table, .rc-risk, .rc-actions
+- Plain language risk only. "We will..." action items only.
+
+REPORT STRUCTURE:
+1. Executive Overview — Social media reputation snapshot
+2. Twitter/X Analysis — Volume, sentiment, key voices, trending discussions
+3. Reddit Analysis — Subreddit presence, discussion themes, sentiment
+4. Instagram Analysis — Brand mentions, visual content, engagement patterns
+5. Cross-Platform Sentiment Summary (table comparing platforms)
+6. Notable Mentions & Conversations (highlight specific impactful posts)
+7. Risk Assessment — Plain language
+8. Month-over-Month Changes (or "Baseline month")
+9. Action Items (5-7 "We will..." commitments)
+
+Use the REAL social media data provided. Reference actual usernames, post content, engagement metrics. This is an intelligence report, not speculation.`,
+
+  executive: `You are the Reputation Citadel report engine generating an Executive Summary.
+
+OUTPUT FORMAT: Return ONLY the HTML body content. Same CSS classes as all Citadel reports.
+
+This report SYNTHESIZES findings from all three other reports (SERP, LLM, Social). You will receive summaries of each.
+
+REPORT STRUCTURE:
+1. Executive Overview — 3-paragraph synthesis of overall reputation health
+2. Reputation Health Dashboard (table with: Category | Status | Risk Level | Key Finding)
+   Categories: Search Presence, LLM Representation, Social Sentiment, Overall
+3. Critical Findings — Top 3-5 most important discoveries across all reports
+4. Opportunity Matrix — Where the biggest reputation gains can be made
+5. Consolidated Risk Assessment — Overall plain language risk
+6. 90-Day Action Plan — 10 prioritized "We will..." commitments, pulling from all three reports
+7. Next Steps — What happens before next month's report
+
+Be strategic and executive-level. This is for C-suite consumption. Concise but comprehensive.`
+};
+
+
+// ─── REPORT GENERATORS ──────────────────────────────────────────────────────
+
+async function generateSERPReport(clientName, keywords, sheetUrl, previousReport, anthropicKey) {
+  // 1. Fetch Google Sheets data
+  let sheetData = { headers: [], latest: [], previous: [] };
+  let sheetSummary = 'No Google Sheet data available.';
+  if (sheetUrl) {
+    try {
+      sheetData = await fetchSheetData(sheetUrl);
+      const latestMD = sheetDataToMarkdown(sheetData.headers, sheetData.latest);
+      const prevMD = sheetData.previous.length
+        ? sheetDataToMarkdown(sheetData.headers, sheetData.previous)
+        : 'No previous month data available.';
+      sheetSummary = `## Current Month Data (${getReportPeriod()}):\n${latestMD}\n\n## Previous Month Data (${getPreviousMonth()}):\n${prevMD}`;
+    } catch (e) {
+      sheetSummary = `Error fetching sheet: ${e.message}`;
     }
   }
-  if (!txt) throw new Error("Claude returned empty response");
-  return txt;
+
+  // 2. Build prompt
+  const userPrompt = `Generate the SERP & ORM Analysis report for:
+
+**Client:** ${clientName}
+**Keywords:** ${keywords}
+**Report Period:** ${getReportPeriod()}
+**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — this is the first report. State that future reports will track month-over-month changes.'}
+
+## Google Sheets SERP Tracker Data:
+${sheetSummary}
+
+${previousReport ? `## Previous Report Summary:\n${previousReport}` : ''}
+
+Generate the complete report HTML body now.`;
+
+  return { systemPrompt: SYSTEM_PROMPTS.serp, userPrompt, sheetData };
 }
 
-function genToken() { const b=new Uint8Array(16); crypto.getRandomValues(b); return Array.from(b).map(x=>x.toString(16).padStart(2,"0")).join(""); }
-function json(data,status=200) { return new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}}); }
+async function generateLLMReport(clientName, keywords, dfLogin, dfPassword, previousReport, anthropicKey) {
+  // 1. Fetch DataForSEO LLM responses
+  let llmData = {};
+  let llmSummary = 'No DataForSEO data available.';
+  if (dfLogin && dfPassword) {
+    try {
+      llmData = await fetchDataForSEO_LLM(keywords, dfLogin, dfPassword);
+      llmSummary = '';
+      for (const [platform, data] of Object.entries(llmData)) {
+        const label = platform === 'chat_gpt' ? 'ChatGPT' : platform === 'gemini' ? 'Gemini' : 'Perplexity';
+        llmSummary += `\n### ${label} (${data.model}) Response:\n${data.text || 'No response received.'}\n\n---\n`;
+      }
+    } catch (e) {
+      llmSummary = `Error fetching LLM data: ${e.message}`;
+    }
+  }
 
-// ══════════════════════════════════════════════════════════════
-// SYSTEM PROMPTS — Complete project prompts
-// ══════════════════════════════════════════════════════════════
+  const userPrompt = `Generate the LLM Reputation Intelligence report for:
 
-function getSystemPrompt(type, logoDataUri) {
-  const logoInstruction = logoDataUri
-    ? `The Reputation Citadel logo URL is: ${logoDataUri}\nUse this exact URL as the src attribute of the logo <img> tag in the report header. Example: <img src="${logoDataUri}" alt="Reputation Citadel" style="height:50px">`
-    : `Use text "Reputation Citadel" in white where the logo would go.`;
+**Client:** ${clientName}
+**Keywords:** ${keywords}
+**Report Period:** ${getReportPeriod()}
+**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — first report.'}
 
-  if (type === "serp") return getSerpPrompt(logoInstruction);
-  if (type === "social") return getSocialPrompt(logoInstruction);
-  if (type === "llm") return getLlmPrompt(logoInstruction);
-  return getExecutivePrompt(logoInstruction);
+## DataForSEO LLM Response Data:
+${llmSummary}
+
+${previousReport ? `## Previous Report Summary:\n${previousReport}` : ''}
+
+Generate the complete report HTML body now.`;
+
+  return { systemPrompt: SYSTEM_PROMPTS.llm, userPrompt, llmData };
 }
 
-function getSerpPrompt(logoInstruction) {
-  return `You are an Online Reputation Management (ORM) analyst for Reputation Citadel. You generate professional, client-ready SERP & ORM Analysis Reports in HTML format.
-Your input data comes from CSV exports of a Google Sheets SERP tracker (using DataForSEO) and a Content Created inventory.
+async function generateSocialReport(clientName, keywords, xpozApiKey, previousReport, anthropicKey) {
+  // 1. Fetch Xpoz social media data
+  let socialData = { twitter: null, reddit: null, instagram: null };
+  let socialSummary = 'No social media data available.';
 
-YOUR WORKFLOW
-Phase 1: Data Ingestion
-- Read the SERP CSV(s) — parse all columns: Rank, Movement, Sentiment, ★ Owned, Title, URL, Display URL, Meta Description, SERP Feature, Keyword, Fetched At.
-- Read the Content Created CSV — parse Live URL, Date Created, Client, Verified. These are the "owned" URLs.
-- Cross-reference ownership: Match SERP URLs against Content Created URLs (normalize URLs by stripping trailing slashes, UTM params, etc.). Mark matches as Owned/Controlled.
-- If a previous report HTML was provided, extract all prior metrics for comparison.
+  if (xpozApiKey) {
+    try {
+      socialData = await fetchXpozSocialData(clientName, xpozApiKey);
+      socialSummary = formatSocialDataForPrompt(socialData);
+    } catch (e) {
+      socialSummary = `Error fetching social data: ${e.message}`;
+    }
+  }
 
-Phase 2: Analysis
-For each keyword tracked, compute:
-SERP Ownership & Control (Top 10 and Top 20):
-- Total results in Top 10 / Top 20
-- Owned/Controlled results count and percentage
-- Unowned Positive results (allies — favorable but not controlled by us)
-- Neutral results count
-- Negative results count and percentage
-- Unlabelled results count
+  const userPrompt = `Generate the Social Media Intelligence report for:
 
-Sentiment Distribution:
-- Positive % (owned + unowned positive combined)
-- Negative %
-- Neutral %
-- Unlabelled % (flag these — they need manual review)
+**Client:** ${clientName}
+**Keywords:** ${keywords}
+**Report Period:** ${getReportPeriod()}
+**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — first report.'}
 
-Negative Exposure Analysis:
-- List every Negative result with: Rank, URL, Domain, Title, Movement
-- Categorize negative types: legal/regulatory sites (BrokerCheck, law firm blogs), news, forums, complaint sites
-- Note which negatives are moving up (worsening) vs. down (improving)
+## Real Social Media Data (collected via Xpoz API):
+${socialSummary}
 
-Owned Content Performance:
-- Every ★ Owned result with current rank and movement direction
-- Which owned content is climbing vs. slipping
-- Owned content NOT currently ranking in Top 30 (from Content Created CSV — URLs that exist but aren't appearing)
+${previousReport ? `## Previous Report Summary:\n${previousReport}` : ''}
 
-Movement Analysis:
-- Results moving up vs. down vs. stable vs. new entries
-- Net direction: are things generally improving or worsening?
+Generate the complete report HTML body now. Reference the REAL data provided above — actual usernames, actual post content, actual engagement numbers.`;
 
-Phase 3: Trend Analysis (When Previous Data Provided)
-If a previous report or earlier CSV snapshots are provided, compute period comparison, ownership trend, sentiment shift, rank movement summary, page 1 control, new entries & exits, baseline comparison, overall trajectory.
-
-Phase 4: Report Generation
-Generate a single self-contained HTML file matching the Reputation Citadel brand format.
-
-TONE & LANGUAGE RULES:
-- Client-facing and encouraging — this report goes to the client. Frame progress positively where earned.
-- Be honest about challenges but constructive.
-- Use "Mr./Ms. [Last Name]" when referring to the client subject.
-- Use professional, measured language throughout.
-- Never editorialize negatively about the client.
-- Frame ORM work as building a "strong digital footprint" and "managing search visibility".
-
-HTML FORMAT SPECIFICATION:
-CSS Variables & Theme:
-:root {
-  --bg: #ffffff; --card: #f0f3f8; --card-border: #d4dae6;
-  --navy: #1b2a4a; --navy-light: #2c4170; --accent: #1b2a4a;
-  --red: #c0392b; --amber: #d4880f; --green: #1e8449;
-  --text: #1e293b; --muted: #5a6a85; --border: #d4dae6;
-  --header-bg: #000000; --owned-gold: #b8860b;
+  return { systemPrompt: SYSTEM_PROMPTS.social, userPrompt, socialData };
 }
 
-Fonts: Headings: Georgia, serif. Body text: 'Segoe UI', system-ui, sans-serif.
+async function generateExecutiveReport(clientName, keywords, serpSummary, llmSummary, socialSummary, previousReport, anthropicKey) {
+  const userPrompt = `Generate the Executive Summary report for:
 
-Header / Masthead:
-- Black background (--header-bg: #000000)
-${logoInstruction}
-- Vertical white divider line
-- Title: "SERP & Online Reputation Report" in white Georgia
-- Subtitle: Client name (bold white), keyword(s), period, generation date in muted blue-gray
+**Client:** ${clientName}
+**Keywords:** ${keywords}
+**Report Period:** ${getReportPeriod()}
+**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — first report.'}
 
-Required Sections (in order):
-1. Executive Summary - Single paragraph card summarizing: which keyword(s), current state of Page 1, ownership percentage, key wins, key challenges.
-2. Key Metrics Dashboard - Two rows of stat cards (grid3): Row 1: SERP Results Analyzed (blue) | Owned/Controlled in Top 10 (green) | Negative in Top 10 (red). Row 2: Positive Sentiment % Top 20 (green) | Negative Sentiment % Top 20 (red) | Page 1 Control % (blue/amber/green based on value)
-3. Trend Analysis (only if previous data provided) - Period comparison table with arrows
-4. SERP Ownership Map - Visual Top 20 with color-coded rows. Green (Owned ★), Light Green (Positive/Unowned), Gray (Neutral), Red (Negative), White (Unlabelled). Owned rows get gold left border.
-5. Sentiment Analysis - Horizontal stacked bar + breakdown table: Sentiment | Count (Top 20) | % | Key URLs
-6. Owned Content Performance - Table of all ★ Owned URLs ranked. Below: "Content Created but Not Ranking" list.
-7. Negative Exposure Analysis - Table with: Rank | Movement | Title | URL | Domain | Category (Legal/Regulatory, News/Media, Complaint Site, Forum/Social, Other). Movement colored: green for ↓ (negative dropping), red for ↑ (negative rising).
-8. Unowned Positive Results (allies) - Third-party pages helping reputation.
-9. Action Items - Brief, numbered list of specific actions the Reputation Citadel team will focus on for the client based on this report's findings. Frame as "what we will do next" not "what you should do". Use first-person plural ("We will...", "Our team will...", "Our next steps include..."). Keep it concise — 4-6 bullet points maximum. Examples: "We will prioritize suppression of the Daily Mail article through targeted content publishing", "Our team will optimize the existing owned content at [URL] to improve its ranking from position X".
-10. Footer - "Reputation Citadel · SERP & Online Reputation Report · Generated [DATE]" + "CONFIDENTIAL — PREPARED FOR CLIENT USE ONLY" in red uppercase.
+## SERP & ORM Report Findings:
+${serpSummary || 'SERP report not yet generated.'}
 
-Styling:
-.owned-row { border-left: 3px solid var(--owned-gold); background: #fdf8ef; }
-.neg-row { background: rgba(192,57,43,0.05); }
-.pos-row { background: rgba(30,132,73,0.05); }
-.movement-up { color: var(--green); font-weight: 700; }
-.movement-down { color: var(--red); font-weight: 700; }
-.movement-stable { color: var(--muted); }
-.movement-new { color: var(--navy); font-style: italic; }
+## LLM Intelligence Report Findings:
+${llmSummary || 'LLM report not yet generated.'}
 
-Rules: No emojis in section headings. All tables use uppercase letter-spaced headers. Mobile responsive (grid collapses at 700px). ★ in gold color. URL columns clickable. Highlight Top 10 rows differently from 11-20.
+## Social Media Intelligence Report Findings:
+${socialSummary || 'Social media report not yet generated.'}
 
-MULTI-KEYWORD REPORTS: When multiple SERP CSVs provided, add Keyword Summary comparison table and per-keyword sections.
+${previousReport ? `## Previous Executive Summary:\n${previousReport}` : ''}
 
-Output the COMPLETE, self-contained HTML file. Nothing else — no commentary, no markdown fences, just pure HTML.`;
+Synthesize all findings into a comprehensive executive summary.`;
+
+  return { systemPrompt: SYSTEM_PROMPTS.executive, userPrompt };
 }
 
-function getSocialPrompt(logoInstruction) {
-  return `You are a social media intelligence analyst for Reputation Citadel. You generate professional, client-ready Social Media Intelligence Reports in HTML format.
 
-When creating a report, analyze available data about the client's social media presence.
+// ─── MAIN REQUEST HANDLER ───────────────────────────────────────────────────
 
-Phase 1: Analysis
-- Categorize posts by sentiment: Negative, Neutral/Mixed, Positive, or Hateful
-- Identify sentiment categories by theme
-- Rank by engagement
-- Identify key voices
-- Build timeline of key events
-- Assess risk level: Low / Medium / Elevated / High / Critical
+export async function onRequest(context) {
+  const { request, env } = context;
 
-Phase 2: Report Generation
+  // CORS
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      }
+    });
+  }
 
-TONE & LANGUAGE RULES:
-- Refer to the subject respectfully — use "Mr./Ms. [Last Name]" throughout.
-- Dry, professional, neutral tone — present facts without editorializing.
-- Sanitize all profanity with [expletive] or [language sanitized].
-- Be kind where possible — highlight genuine positives generously.
-- Never use: firestorm, pile-on, battleground, time bomb, toxic, ignites, massive, slammed.
-- Preferred: heightened scrutiny, increased attention, online discussion, concerns raised.
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'POST only' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
 
-TREND ANALYSIS (When Previous Report Provided):
-Add period comparison, volume trend, sentiment shift, impressions trend, new developments, resolved items, overall trajectory.
+  try {
+    const body = await request.json();
+    const {
+      reportType, // 'serp' | 'llm' | 'social' | 'executive' | 'all'
+      clientName,
+      keywords,
+      sheetUrl,
+      previousReport,
+      anthropicKey,
+      dfLogin,
+      dfPassword,
+      xpozApiKey,
+      // For executive: pre-generated summaries
+      serpSummary,
+      llmSummary,
+      socialSummary,
+      stream = true  // Default to streaming
+    } = body;
 
-HTML FORMAT SPECIFICATION:
-:root {
-  --bg: #ffffff; --card: #f0f3f8; --card-border: #d4dae6;
-  --navy: #1b2a4a; --navy-light: #2c4170; --accent: #1b2a4a;
-  --red: #c0392b; --amber: #d4880f; --green: #1e8449;
-  --text: #1e293b; --muted: #5a6a85; --border: #d4dae6;
-  --header-bg: #000000;
+    if (!clientName || !anthropicKey) {
+      return new Response(JSON.stringify({ error: 'clientName and anthropicKey required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const baseUrl = 'https://citadel-dashboard.pages.dev';
+
+    // ── GENERATE ALL FLOW ──
+    if (reportType === 'all') {
+      return handleGenerateAll(body, baseUrl);
+    }
+
+    // ── SINGLE REPORT ──
+    let reportConfig;
+
+    switch (reportType) {
+      case 'serp':
+        reportConfig = await generateSERPReport(clientName, keywords, sheetUrl, previousReport, anthropicKey);
+        break;
+      case 'llm':
+        reportConfig = await generateLLMReport(clientName, keywords, dfLogin, dfPassword, previousReport, anthropicKey);
+        break;
+      case 'social':
+        reportConfig = await generateSocialReport(clientName, keywords, xpozApiKey, previousReport, anthropicKey);
+        break;
+      case 'executive':
+        reportConfig = await generateExecutiveReport(clientName, keywords, serpSummary, llmSummary, socialSummary, previousReport, anthropicKey);
+        break;
+      default:
+        return new Response(JSON.stringify({ error: `Invalid reportType: ${reportType}` }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+    }
+
+    if (stream) {
+      // Stream Claude response as SSE
+      return handleStreamedReport(reportConfig, reportType, clientName, anthropicKey, baseUrl);
+    } else {
+      // Non-streaming: return complete HTML
+      return handleCompleteReport(reportConfig, reportType, clientName, anthropicKey, baseUrl);
+    }
+
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message, stack: err.stack }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  }
 }
 
-Fonts: Georgia headings, 'Segoe UI' body.
+// ── STREAMED REPORT (SSE) ────────────────────────────────────────────────────
 
-Header / Masthead:
-- Black background (#000000)
-${logoInstruction}
-- Vertical white divider line
-- "Social Media Intelligence Report" in white Georgia
-- Subject name, period, platforms, date in muted blue-gray
+async function handleStreamedReport(config, reportType, clientName, anthropicKey, baseUrl) {
+  const claudeStream = await streamClaude(config.systemPrompt, config.userPrompt, anthropicKey);
 
-Required Sections:
-1. Executive Summary — single paragraph in a card
-2. Key Metrics — two rows of 3 stat cards (grid3): Row 1: Relevant Posts Found (blue), Negative Sentiment % (red), Total Impressions (amber). Row 2: Key business metrics.
-3. Trend Analysis — only if comparing to previous report
-4. Sentiment Analysis — overall bar + category table with: Category | Sentiment | Volume | Key Themes | Example
-5. Most Engaged Posts — table: Date | Author | Impressions | Likes | RTs | Summary
-6. Timeline of Key Events — vertical timeline with navy dots, red for crisis
-7. Risk Analysis — risk meter gradient bar green→amber→red with positioned marker. Critical/Elevated risks in grid2. Mitigating factors card.
-8. Key Voices & Accounts — table: Account | Role | Sentiment | Reach
-9. Platform Breakdown — grid2 cards per platform
-10. Notable Quotes — styled blockquotes
-11. Legal Landscape — table with status tags
-12. Action Items — Brief, numbered list of specific actions the Reputation Citadel team will focus on for the client. Frame as "what we will do next" using first-person plural ("We will...", "Our team will..."). Keep concise — 4-6 items maximum.
-13. Footer — "Reputation Citadel · Social Media Intelligence Report · Generated [DATE]" + "CONFIDENTIAL" in red uppercase
+  const reportLabels = {
+    serp: 'SERP & ORM Analysis',
+    llm: 'LLM Reputation Intelligence',
+    social: 'Social Media Intelligence',
+    executive: 'Executive Summary'
+  };
 
-Styling: .card, .stat, .grid2, .grid3, .tag, .tag-red, .tag-amber, .tag-green, .tag-blue, .timeline-item, .quote, .risk-meter classes.
+  // Transform Claude's SSE into our own SSE with template wrapping
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
 
-Rules: No emojis in headings. Tables use uppercase letter-spaced headers. Mobile responsive. Risk meter with gradient bar and positioned circle marker.
+  // Process Claude stream in background
+  (async () => {
+    const reader = claudeStream.getReader();
+    const decoder = new TextDecoder();
+    let fullBody = '';
+    let buffer = '';
 
-Output the COMPLETE, self-contained HTML file. Nothing else — no commentary, no markdown fences, just pure HTML.`;
+    try {
+      // Send initial metadata
+      await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'meta', reportType, clientName })}\n\n`));
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+                fullBody += parsed.delta.text;
+                await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'delta', text: parsed.delta.text })}\n\n`));
+              }
+            } catch { /* skip non-JSON lines */ }
+          }
+        }
+      }
+
+      // Send complete HTML
+      const crossLinks = buildCrossLinks(reportType, clientName, baseUrl);
+      const finalHtml = fillTemplate({
+        REPORT_TITLE: reportLabels[reportType],
+        CLIENT_NAME: clientName,
+        REPORT_PERIOD: getReportPeriod(),
+        GENERATED_DATE: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        REPORT_TYPE_LABEL: reportLabels[reportType],
+        REPORT_BODY: fullBody,
+        CROSS_LINKS: crossLinks
+      });
+
+      await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'complete', html: finalHtml, body: fullBody })}\n\n`));
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
+    } catch (err) {
+      await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`));
+    } finally {
+      await writer.close();
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    }
+  });
 }
 
-function getLlmPrompt(logoInstruction) {
-  return `You are an AI Reputation Intelligence analyst for Reputation Citadel. You generate professional, client-ready LLM Reputation Intelligence Reports in HTML format.
+// ── COMPLETE REPORT (NON-STREAMING) ──────────────────────────────────────────
 
-Your purpose is to analyze how Large Language Models (ChatGPT, Claude, Gemini, Perplexity) represent a client when users ask about them, and to assess how much control we have over the AI narrative.
+async function handleCompleteReport(config, reportType, clientName, anthropicKey, baseUrl) {
+  const reportLabels = {
+    serp: 'SERP & ORM Analysis',
+    llm: 'LLM Reputation Intelligence',
+    social: 'Social Media Intelligence',
+    executive: 'Executive Summary'
+  };
 
-YOUR DATA SOURCES:
-1. LLM Responses API — Real-time responses from ChatGPT, Claude, Gemini, and Perplexity with full text, fan-out queries, cited sources, model parameters.
-2. LLM Mentions API — Historical mention data with mention counts, source domains, brand entities.
-3. Content Created Inventory — Owned/controlled URLs.
+  const body = await callClaude(config.systemPrompt, config.userPrompt, anthropicKey);
+  const crossLinks = buildCrossLinks(reportType, clientName, baseUrl);
 
-YOUR WORKFLOW:
-Phase 1: Parse LLM Responses JSON per platform and query. Parse mentions data. Parse Content Created inventory. Extract prior metrics if previous report provided.
+  const html = fillTemplate({
+    REPORT_TITLE: reportLabels[reportType],
+    CLIENT_NAME: clientName,
+    REPORT_PERIOD: getReportPeriod(),
+    GENERATED_DATE: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+    REPORT_TYPE_LABEL: reportLabels[reportType],
+    REPORT_BODY: body,
+    CROSS_LINKS: crossLinks
+  });
 
-Phase 2: Query Analysis
-- Response Sentiment Classification: Positive, Neutral, Mixed, or Negative per platform.
-  - POSITIVE: Favorable, highlights achievements, no controversies.
-  - NEUTRAL: Factual/biographical, no strong framing.
-  - MIXED: Both positive and negative elements.
-  - NEGATIVE: Leads with or emphasizes negative information.
-- Narrative Themes: Key topics per LLM, consistent vs platform-specific themes, flag hallucinations.
-- Negative Content Propagation: Source URLs feeding negatives, prominence positioning, content type classification.
-- Fan-Out Query Analysis: Categorize by intent (Informational, Navigational, Reputational, Professional). Flag dangerous queries. Identify content opportunities.
-
-Phase 3: Source & Ownership Analysis
-- Extract all cited URLs/domains, cross-reference against owned inventory.
-- Calculate: total unique sources, owned % cited, positive allies, negative sources, citation frequency.
-- Note: Source data most complete from Perplexity/Gemini. Flag when unavailable.
-
-Phase 4: Cross-Platform Comparison
-- Sentiment matrix per query × platform. Most favorable platform, most negative platform, consistency score.
-
-Phase 5: Risk Assessment
-AI Reputation Risk Score (1-100):
-- Negative sentiment prevalence (30%)
-- Prominence of negative content (25%)
-- Dangerous fan-out queries (15%)
-- Negative source frequency (15%)
-- Cross-platform consistency of negatives (15%)
-Scores: 0-25 LOW, 26-50 MODERATE, 51-75 HIGH, 76-100 CRITICAL.
-
-TONE: Client-facing, encouraging, professional. "Mr./Ms. [Last Name]". Negatives are "exposure" or "narrative risk". Frame as "managing AI narrative" and "optimizing AI visibility".
-
-HTML FORMAT:
-:root {
-  --bg: #ffffff; --card: #f0f3f8; --card-border: #d4dae6;
-  --navy: #1b2a4a; --navy-light: #2c4170; --accent: #1b2a4a;
-  --red: #c0392b; --amber: #d4880f; --green: #1e8449;
-  --text: #1e293b; --muted: #5a6a85; --border: #d4dae6;
-  --header-bg: #000000; --owned-gold: #b8860b;
-  --chatgpt: #10a37f; --claude: #d97706; --gemini: #4285f4; --perplexity: #20808d;
-}
-Fonts: Georgia headings, 'Segoe UI' body.
-
-Header:
-- Black background (#000000)
-${logoInstruction}
-- "LLM Reputation Intelligence Report" in white Georgia
-- Client name, platforms, date
-
-Sections:
-1. Executive Summary — platforms analyzed, queries tested, risk score, key findings, top recommendation.
-2. AI Reputation Risk Score — large visual gauge 1-100 with green/amber/red. Below the gauge, show a simple breakdown table of the five risk factors. For each factor show: Factor Name | Finding (in plain language, e.g., "2 dangerous queries found", "Negative sentiment on 3 of 4 platforms") | Risk Level (Low/Medium/High). Do NOT show raw weighted scores like "10/15" — these are confusing to clients. Show human-readable findings instead.
-3. Key Metrics Dashboard — grid3: Row 1: Queries Analyzed | Platforms Covered | Overall Sentiment. Row 2: Owned Sources Cited % | Negative Narratives Found | Dangerous Fan-Out Queries.
-4. Cross-Platform Sentiment Matrix — query × platform color-coded cells + Consistency Score column.
-5. LLM Response Analysis per query — query text, side-by-side summaries, sentiment per platform, themes, fan-out queries with risk flags, sources with owned indicators.
-6. Fan-Out Query Analysis — complete list, categorized, dangerous in red, opportunities in green.
-7. Source & Ownership Analysis — table: Domain, URL, Frequency, Owned Y/N, Sentiment. Plus "Sources Not Yet Cited".
-8. Negative Content Propagation Map — which sources feed which LLMs, prominence, cross-platform propagation score.
-9. Action Items — Brief, numbered list of specific actions the Reputation Citadel team will focus on for the client based on this report. Frame as "what we will do next" using first-person plural ("We will...", "Our team will..."). Keep concise — 4-6 items. Focus on platform-specific actions, content creation priorities, and negative content mitigation steps we will take.
-10. Footer — "Reputation Citadel · LLM Reputation Intelligence Report · Generated [DATE]" + platforms + "CONFIDENTIAL" in red.
-
-Styling: .card, .stat, .grid2, .grid3, .tag system. Platform color coding with CSS variables.
-
-Rules: No emojis in headings. Uppercase letter-spaced table headers. Mobile responsive. Platform names color-coded. Risk gauge visually prominent.
-
-DATA LIMITATIONS: Note in methodology: Perplexity/Gemini have best source data. Fan-out queries only with web search. Non-deterministic point-in-time snapshot.
-
-Output ONLY complete HTML. No markdown fences, no commentary.`;
+  return new Response(JSON.stringify({ html, body, reportType }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    }
+  });
 }
 
-function getExecutivePrompt(logoInstruction) {
-  return `You are a senior ORM analyst for Reputation Citadel generating an Executive Summary Report in HTML.
-Synthesize findings across SERP analysis, social media intelligence, and LLM reputation data into a concise executive brief for C-suite readers.
+// ── GENERATE ALL FLOW: SERP → LLM → SOCIAL → EXECUTIVE ─────────────────────
 
-TONE: Client-facing, encouraging, professional. "Mr./Ms. [Last Name]".
+async function handleGenerateAll(params, baseUrl) {
+  const { clientName, keywords, sheetUrl, previousReport, anthropicKey, dfLogin, dfPassword, xpozApiKey } = params;
 
-HTML FORMAT:
-:root { --bg:#ffffff; --card:#f0f3f8; --navy:#1b2a4a; --red:#c0392b; --green:#1e8449; --amber:#d4880f; --text:#1e293b; --muted:#5a6a85; --header-bg:#000000; --owned-gold:#b8860b; }
-Georgia headings, 'Segoe UI' body.
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
 
-Header: Black background. ${logoInstruction}. "Executive Summary Report" in white Georgia.
+  const send = async (data) => {
+    await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+  };
 
-Sections: Executive Overview, SERP Snapshot, Social Media Snapshot, AI/LLM Reputation Snapshot, Combined Risk Assessment, Action Items (brief list of what our team will focus on next, using "We will..." framing), Footer with confidential notice.
+  const reportLabels = {
+    serp: 'SERP & ORM Analysis',
+    llm: 'LLM Reputation Intelligence',
+    social: 'Social Media Intelligence',
+    executive: 'Executive Summary'
+  };
 
-IMPORTANT — LINKED REPORTS:
-If report URLs are provided in the data, each snapshot section (SERP, LLM, Social Media) MUST include a styled "View Full Report →" link at the bottom of that section. Style the link as:
-<a href="URL" target="_blank" style="display:inline-block;margin-top:16px;padding:10px 24px;background:var(--navy);color:#fff;text-decoration:none;border-radius:6px;font-family:'Segoe UI',sans-serif;font-size:0.9rem">View Full SERP Report →</a>
-(Adjust the label for each report type.) This allows the reader to drill into the detailed report directly from the summary.
+  (async () => {
+    const reports = {};
+    const order = ['serp', 'llm', 'social', 'executive'];
 
-Output ONLY complete HTML.`;
+    try {
+      for (const type of order) {
+        await send({ type: 'status', report: type, status: 'generating', label: reportLabels[type] });
+
+        let config;
+        switch (type) {
+          case 'serp':
+            config = await generateSERPReport(clientName, keywords, sheetUrl, previousReport, anthropicKey);
+            break;
+          case 'llm':
+            config = await generateLLMReport(clientName, keywords, dfLogin, dfPassword, previousReport, anthropicKey);
+            break;
+          case 'social':
+            config = await generateSocialReport(clientName, keywords, xpozApiKey, previousReport, anthropicKey);
+            break;
+          case 'executive':
+            config = await generateExecutiveReport(
+              clientName, keywords,
+              reports.serp?.body || '',
+              reports.llm?.body || '',
+              reports.social?.body || '',
+              previousReport, anthropicKey
+            );
+            break;
+        }
+
+        // Generate report (non-streaming for sequential flow)
+        const body = await callClaude(config.systemPrompt, config.userPrompt, anthropicKey);
+        const crossLinks = buildCrossLinks(type, clientName, baseUrl);
+        const html = fillTemplate({
+          REPORT_TITLE: reportLabels[type],
+          CLIENT_NAME: clientName,
+          REPORT_PERIOD: getReportPeriod(),
+          GENERATED_DATE: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+          REPORT_TYPE_LABEL: reportLabels[type],
+          REPORT_BODY: body,
+          CROSS_LINKS: crossLinks
+        });
+
+        reports[type] = { html, body };
+
+        await send({
+          type: 'report_complete',
+          report: type,
+          label: reportLabels[type],
+          html,
+          bodyPreview: body.slice(0, 500)
+        });
+      }
+
+      await send({ type: 'all_complete', reports: Object.keys(reports) });
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
+    } catch (err) {
+      await send({ type: 'error', message: err.message });
+    } finally {
+      await writer.close();
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    }
+  });
 }
