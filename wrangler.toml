@@ -1,9 +1,19 @@
-# Citadel Dashboard v2 — Cloudflare Pages + Functions
-# ====================================================
+# Citadel Dashboard — Cloudflare Pages Configuration
+# ===================================================
+# This file configures Cloudflare Workers (the backend functions).
+# Your secrets (API keys) are set via the Cloudflare dashboard, NOT here.
+
 name = "citadel-dashboard"
 compatibility_date = "2024-12-01"
 
-# KV Namespace — create in Cloudflare dashboard, paste ID below
+# KV Namespace for storing clients, reports, and settings
+# You'll create this in the Cloudflare dashboard and paste the ID below
 [[kv_namespaces]]
 binding = "CITADEL_KV"
 id = "PASTE_YOUR_KV_NAMESPACE_ID_HERE"
+
+# Secrets (set via `wrangler secret put` or Cloudflare dashboard):
+# ANTHROPIC_API_KEY - your Claude API key
+# DATAFORSEO_LOGIN - your DataForSEO login
+# DATAFORSEO_PASSWORD - your DataForSEO password
+# ADMIN_PASSWORD - password to access the dashboard
