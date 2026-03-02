@@ -26,8 +26,7 @@ export async function onRequestPost(context) {
       dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(ld, null, 2)}\n`;
     }
     if (type === "social" || type === "executive") {
-      const sd = await fetchSocialData(kw, env);
-      dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
+      dataPayload += `\n=== SOCIAL MEDIA ===\nClient: ${clientName}\nKeywords: ${kw}\nUse the Xpoz tools to search Twitter and Reddit for this client. Collect real posts, engagement metrics, and sentiment data.\n`;
     }
     if (type === "executive" && linkedReports) {
       const base = new URL(request.url).origin;
@@ -45,7 +44,14 @@ export async function onRequestPost(context) {
     const userPrompt = buildUserPrompt(clientName, type, kw, reportDate, dataPayload);
     if (!env.ANTHROPIC_API_KEY) return json({ error: "No API key" }, 400);
 
-    let html = await callClaudeStream(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
+    let html;
+    if (type === "social") {
+      // Social reports use MCP (Xpoz) + web search — agentic loop, no streaming
+      html = await callClaudeWithTools(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
+    } else {
+      // Other reports use streaming (faster, no tool use needed)
+      html = await callClaudeStream(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
+    }
     html = html.trim();
     if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
 
@@ -148,42 +154,7 @@ async function fetchLLMResponses(keywords, login, password) {
   return results;
 }
 
-async function fetchSocialData(keywords, env) {
-  // Fetch real social media data via Xpoz API
-  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
-  const mainKw = kws[0] || keywords;
-  const data = { twitter: [], reddit: [], instagram: [], errors: [] };
-
-  // Xpoz API base - uses the MCP server endpoint
-  const xpozBase = "https://mcp.xpoz.ai";
-
-  // Twitter search
-  try {
-    const r = await fetch(`${xpozBase}/api/twitter/posts/search`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keywords: mainKw, max_results: 50 })
-    });
-    if (r.ok) { const d = await r.json(); data.twitter = d.posts || d.results || d.data || []; }
-  } catch (e) { data.errors.push(`Twitter: ${e.message}`); }
-
-  // Reddit search
-  try {
-    const r = await fetch(`${xpozBase}/api/reddit/posts/search`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keywords: mainKw, max_results: 30 })
-    });
-    if (r.ok) { const d = await r.json(); data.reddit = d.posts || d.results || d.data || []; }
-  } catch (e) { data.errors.push(`Reddit: ${e.message}`); }
-
-  // If Xpoz direct API fails, the Claude prompt will use web search context
-  if (!data.twitter.length && !data.reddit.length) {
-    data.note = "Direct API returned no results. Claude should use web search knowledge and any available context to analyze social media presence for this client.";
-  }
-
-  return data;
-}
+// Social media data is now fetched by Claude directly via Xpoz MCP tools
 
 // ═══════════════════════════════════════
 // CLAUDE STREAMING
@@ -216,6 +187,68 @@ async function callClaudeStream(apiKey, system, user) {
 }
 
 function genTok() { const b = new Uint8Array(16); crypto.getRandomValues(b); return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join(""); }
+
+// Claude with Xpoz MCP tools — agentic loop for social media reports
+async function callClaudeWithTools(apiKey, system, userContent) {
+  const messages = [{ role: "user", content: userContent }];
+  let finalText = "";
+  const maxTurns = 15; // safety limit
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const body = {
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 64000,
+      system,
+      messages,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      mcp_servers: [{ type: "url", url: "https://mcp.xpoz.ai/mcp", name: "xpoz" }],
+    };
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const e = await r.text();
+      throw new Error(`Claude ${r.status}: ${e.substring(0, 300)}`);
+    }
+
+    const data = await r.json();
+
+    // Collect all text from this response
+    let turnText = "";
+    const toolResults = [];
+
+    for (const block of data.content) {
+      if (block.type === "text") {
+        turnText += block.text;
+      } else if (block.type === "tool_use" || block.type === "mcp_tool_use") {
+        // Claude wants to use a tool — we need to pass results back
+        toolResults.push({
+          type: block.type === "mcp_tool_use" ? "mcp_tool_result" : "tool_result",
+          tool_use_id: block.id,
+          content: "Tool executed by server"
+        });
+      }
+    }
+
+    finalText += turnText;
+
+    // If stop_reason is "end_turn" or no tool use, we're done
+    if (data.stop_reason === "end_turn" || toolResults.length === 0) {
+      break;
+    }
+
+    // Add assistant response and tool results to continue the conversation
+    messages.push({ role: "assistant", content: data.content });
+    messages.push({ role: "user", content: toolResults });
+  }
+
+  if (!finalText) throw new Error("Empty response from Claude");
+  return finalText;
+}
 function json(d, s = 200) { return new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); }
 
 // ═══════════════════════════════════════
@@ -364,7 +397,18 @@ Output ONLY the completed HTML.`;
 function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-You will receive real social media data from Twitter/X and Reddit (collected via Xpoz API). If the data is sparse, supplement with your knowledge but note this clearly. Categorize posts by sentiment, identify key voices, build timeline, assess risk.
+IMPORTANT — DATA COLLECTION: You have access to Xpoz tools and web search. You MUST use them to collect real data:
+1. Use getTwitterPostsByKeywords to search Twitter/X for the client's name. Collect posts, engagement, dates.
+2. Use getRedditPostsByKeywords to search Reddit for mentions. Collect posts and comments.
+3. Use web_search to find recent news articles and other social mentions.
+4. Search multiple keyword variations (full name, company name, known aliases).
+5. Categorize every post by sentiment: Positive, Neutral/Mixed, Negative, or Hateful.
+6. Identify the top most-engaged posts by impressions/likes.
+7. Identify key voices driving conversation.
+8. Build a timeline of key events.
+9. Assess risk: Low / Medium / Elevated / High / Critical.
+
+After collecting data, generate the report.
 
 TONE: Professional, neutral. "Mr./Ms. [Last Name]". Sanitize profanity with [expletive]. No inflammatory words (firestorm, toxic, slammed). Use: heightened scrutiny, concerns raised, online discussion.
 
