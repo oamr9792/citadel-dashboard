@@ -1,1073 +1,476 @@
-// ============================================================================
-// REPUTATION CITADEL — generate.js
-// Cloudflare Pages Function: /functions/api/generate.js
-// Handles: SERP, LLM, Social Media, Executive Summary report generation
-// ============================================================================
+// functions/api/generate.js — Reputation Citadel Report Generator
+// Shared CSS + HTML templates for consistent reports across all types
 
-// ─── SHARED HTML TEMPLATE ────────────────────────────────────────────────────
-// All 4 report types use this identical structure with [PLACEHOLDERS]
+export async function onRequestPost(context) {
+  const { request, env } = context;
+  const auth = request.headers.get("X-Admin-Password");
+  if (auth !== env.ADMIN_PASSWORD) return json({ error: "Unauthorized" }, 401);
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
+  const { clientId, clientName, type, keywords, sheetUrl, previousReportId, linkedReports } = body;
+  if (!clientId || !clientName || !type) return json({ error: "Missing required fields" }, 400);
 
-const HTML_TEMPLATE = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>[REPORT_TITLE] — [CLIENT_NAME] | Reputation Citadel</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap');
-  :root {
-    --rc-ink: #0f1419;
-    --rc-paper: #ffffff;
-    --rc-slate: #536471;
-    --rc-border: #e1e4e8;
-    --rc-accent: #1d4ed8;
-    --rc-accent-light: #eff6ff;
-    --rc-green: #059669;
-    --rc-green-light: #ecfdf5;
-    --rc-amber: #d97706;
-    --rc-amber-light: #fffbeb;
-    --rc-red: #dc2626;
-    --rc-red-light: #fef2f2;
-    --rc-surface: #f8fafc;
-  }
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'DM Sans', -apple-system, sans-serif;
-    color: var(--rc-ink);
-    background: var(--rc-surface);
-    line-height: 1.65;
-    -webkit-font-smoothing: antialiased;
-  }
-  .rc-report { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
-  /* Header */
-  .rc-header {
-    display: flex; align-items: center; gap: 20px;
-    padding-bottom: 32px; margin-bottom: 40px;
-    border-bottom: 2px solid var(--rc-ink);
-  }
-  .rc-logo { height: 48px; width: auto; }
-  .rc-header-text h1 {
-    font-family: 'DM Serif Display', serif;
-    font-size: 28px; font-weight: 400; line-height: 1.2;
-  }
-  .rc-header-text .rc-subtitle {
-    font-size: 14px; color: var(--rc-slate); margin-top: 4px;
-  }
-  /* Metadata strip */
-  .rc-meta {
-    display: flex; flex-wrap: wrap; gap: 24px;
-    padding: 16px 0; margin-bottom: 32px;
-    border-bottom: 1px solid var(--rc-border);
-    font-size: 13px; color: var(--rc-slate);
-  }
-  .rc-meta strong { color: var(--rc-ink); font-weight: 500; }
-  /* Section blocks */
-  .rc-section { margin-bottom: 36px; }
-  .rc-section-title {
-    font-family: 'DM Serif Display', serif;
-    font-size: 22px; font-weight: 400;
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--rc-border);
-  }
-  .rc-section p { margin-bottom: 12px; color: #1a1a1a; }
-  /* Risk levels — plain language badges */
-  .rc-risk {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 6px 14px; border-radius: 6px;
-    font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
-  }
-  .rc-risk::before {
-    content: ''; width: 8px; height: 8px; border-radius: 50%;
-  }
-  .rc-risk--low { background: var(--rc-green-light); color: var(--rc-green); }
-  .rc-risk--low::before { background: var(--rc-green); }
-  .rc-risk--moderate { background: var(--rc-amber-light); color: var(--rc-amber); }
-  .rc-risk--moderate::before { background: var(--rc-amber); }
-  .rc-risk--elevated { background: var(--rc-red-light); color: var(--rc-red); }
-  .rc-risk--elevated::before { background: var(--rc-red); }
-  /* Data tables */
-  .rc-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
-  .rc-table th {
-    text-align: left; padding: 10px 12px;
-    background: var(--rc-surface); border-bottom: 2px solid var(--rc-border);
-    font-weight: 600; font-size: 12px; text-transform: uppercase;
-    letter-spacing: 0.04em; color: var(--rc-slate);
-  }
-  .rc-table td {
-    padding: 10px 12px; border-bottom: 1px solid var(--rc-border);
-    vertical-align: top;
-  }
-  .rc-table tr:last-child td { border-bottom: none; }
-  /* Action items — "We will..." framing */
-  .rc-actions {
-    background: var(--rc-accent-light);
-    border-left: 4px solid var(--rc-accent);
-    padding: 20px 24px; border-radius: 0 8px 8px 0;
-    margin: 24px 0;
-  }
-  .rc-actions h3 {
-    font-size: 15px; font-weight: 700; color: var(--rc-accent);
-    margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.03em;
-  }
-  .rc-actions ol {
-    padding-left: 20px; counter-reset: action;
-    list-style: none;
-  }
-  .rc-actions li {
-    position: relative; padding: 6px 0 6px 8px;
-    counter-increment: action;
-    font-size: 14px; line-height: 1.6;
-  }
-  .rc-actions li::before {
-    content: counter(action) '.';
-    position: absolute; left: -20px;
-    font-weight: 700; color: var(--rc-accent);
-  }
-  /* Trend indicators */
-  .rc-trend-up { color: var(--rc-green); }
-  .rc-trend-down { color: var(--rc-red); }
-  .rc-trend-flat { color: var(--rc-slate); }
-  /* Cross-links */
-  .rc-crosslinks {
-    display: flex; flex-wrap: wrap; gap: 12px;
-    padding-top: 24px; margin-top: 40px;
-    border-top: 1px solid var(--rc-border);
-  }
-  .rc-crosslink {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 16px; border-radius: 6px;
-    background: var(--rc-surface); border: 1px solid var(--rc-border);
-    color: var(--rc-accent); text-decoration: none;
-    font-size: 13px; font-weight: 500;
-    transition: border-color 0.15s, background 0.15s;
-  }
-  .rc-crosslink:hover { background: var(--rc-accent-light); border-color: var(--rc-accent); }
-  /* Footer */
-  .rc-footer {
-    margin-top: 48px; padding-top: 24px;
-    border-top: 2px solid var(--rc-ink);
-    font-size: 12px; color: var(--rc-slate);
-    display: flex; justify-content: space-between;
-  }
-  /* Responsive */
-  @media (max-width: 640px) {
-    .rc-header { flex-direction: column; align-items: flex-start; }
-    .rc-header-text h1 { font-size: 22px; }
-    .rc-meta { flex-direction: column; gap: 8px; }
-    .rc-table { font-size: 12px; }
-    .rc-table th, .rc-table td { padding: 8px 6px; }
-  }
-  @media print {
-    body { background: white; }
-    .rc-report { padding: 0; }
-    .rc-crosslinks { display: none; }
-  }
-</style>
-</head>
-<body>
-<div class="rc-report">
-  <header class="rc-header">
-    <img src="https://citadel-dashboard.pages.dev/logo.png" alt="Reputation Citadel" class="rc-logo" />
-    <div class="rc-header-text">
-      <h1>[REPORT_TITLE]</h1>
-      <div class="rc-subtitle">[CLIENT_NAME] — [REPORT_PERIOD]</div>
-    </div>
-  </header>
-  <div class="rc-meta">
-    <span><strong>Client:</strong> [CLIENT_NAME]</span>
-    <span><strong>Period:</strong> [REPORT_PERIOD]</span>
-    <span><strong>Generated:</strong> [GENERATED_DATE]</span>
-    <span><strong>Report Type:</strong> [REPORT_TYPE_LABEL]</span>
-  </div>
-  [REPORT_BODY]
-  [CROSS_LINKS]
-  <footer class="rc-footer">
-    <span>Reputation Citadel — Confidential</span>
-    <span>Generated [GENERATED_DATE]</span>
-  </footer>
-</div>
-</body>
-</html>`;
-
-
-// ─── UTILITY HELPERS ─────────────────────────────────────────────────────────
-
-function getReportPeriod() {
-  const now = new Date();
-  const currentMonth = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-  return currentMonth;
-}
-
-function getPreviousMonth() {
-  const now = new Date();
-  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return prev.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-}
-
-function getMonthKey(dateStr) {
-  // Returns YYYY-MM from various date formats
   try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return null;
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  } catch { return null; }
+    const typeNames = { serp: "SERP & ORM Analysis", social: "Social Media Intelligence", llm: "LLM Reputation Intelligence", executive: "Executive Summary" };
+    let dataPayload = "";
+    const reportDate = new Date().toISOString().split("T")[0];
+    const kw = keywords || clientName;
+
+    // ── Fetch data based on report type ──
+    if ((type === "serp" || type === "executive") && sheetUrl) {
+      const sd = await fetchGoogleSheet(sheetUrl);
+      dataPayload += sd ? `\n=== GOOGLE SHEET DATA ===\n${sd}\n` : "\n=== GOOGLE SHEET ===\nUnable to fetch.\n";
+    }
+    if ((type === "llm" || type === "executive") && env.DATAFORSEO_LOGIN) {
+      const ld = await fetchLLMResponses(kw, env.DATAFORSEO_LOGIN, env.DATAFORSEO_PASSWORD);
+      dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(ld, null, 2)}\n`;
+    }
+    if (type === "social" || type === "executive") {
+      const sd = await fetchSocialData(kw, env);
+      dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
+    }
+    if (type === "executive" && linkedReports) {
+      const base = new URL(request.url).origin;
+      let lnk = "\n=== LINKED REPORTS ===\nAdd 'View Full Report' buttons in each section:\n";
+      if (linkedReports.serp) lnk += `SERP: ${base}/share/${linkedReports.serp.shareToken}\n`;
+      if (linkedReports.llm) lnk += `LLM: ${base}/share/${linkedReports.llm.shareToken}\n`;
+      if (linkedReports.social) lnk += `Social: ${base}/share/${linkedReports.social.shareToken}\n`;
+      dataPayload += lnk;
+    }
+    if (previousReportId) {
+      try { const p = await env.CITADEL_KV.get(`report-html:${previousReportId}`); if (p) dataPayload += `\n=== PREVIOUS REPORT ===\n${p.substring(0, 15000)}\n`; } catch {}
+    }
+
+    const systemPrompt = buildSystemPrompt(type);
+    const userPrompt = buildUserPrompt(clientName, type, kw, reportDate, dataPayload);
+    if (!env.ANTHROPIC_API_KEY) return json({ error: "No API key" }, 400);
+
+    let html = await callClaudeStream(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
+    html = html.trim();
+    if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
+
+    const shareToken = genTok();
+    const reportId = `r_${Date.now()}`;
+    const meta = { id: reportId, clientId, clientName, type, typeName: typeNames[type] || type, keywords: kw, sheetUrl: sheetUrl || "", createdAt: new Date().toISOString(), shareToken, status: "complete" };
+    await env.CITADEL_KV.put(`report-html:${reportId}`, html, { expirationTtl: 31536000 });
+    await env.CITADEL_KV.put(`report:${reportId}`, JSON.stringify(meta), { expirationTtl: 31536000 });
+    await env.CITADEL_KV.put(`share:${shareToken}`, reportId, { expirationTtl: 31536000 });
+    let idx = []; try { const e = await env.CITADEL_KV.get("reports-index"); if (e) idx = JSON.parse(e); } catch {}
+    idx.unshift(meta);
+    await env.CITADEL_KV.put("reports-index", JSON.stringify(idx));
+    return json({ success: true, report: meta });
+  } catch (err) { return json({ error: `Generation failed: ${err.message}` }, 500); }
 }
 
-function currentMonthKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-}
+// ═══════════════════════════════════════
+// DATA FETCHERS
+// ═══════════════════════════════════════
 
-function previousMonthKey() {
-  const now = new Date();
-  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function riskBadge(level) {
-  // Plain language risk — not "10/15" weighted scores
-  const map = {
-    low: '<span class="rc-risk rc-risk--low">Low Risk — Stable</span>',
-    moderate: '<span class="rc-risk rc-risk--moderate">Moderate Risk — Monitor Closely</span>',
-    elevated: '<span class="rc-risk rc-risk--elevated">Elevated Risk — Immediate Action Needed</span>',
-  };
-  return map[level] || map.moderate;
-}
-
-function buildCrossLinks(reportType, clientName, baseUrl) {
-  const types = [
-    { key: 'serp', label: 'SERP & ORM Report', icon: '🔍' },
-    { key: 'llm', label: 'LLM Intelligence Report', icon: '🤖' },
-    { key: 'social', label: 'Social Media Report', icon: '📱' },
-    { key: 'executive', label: 'Executive Summary', icon: '📊' },
+async function fetchGoogleSheet(sheetUrl) {
+  const m = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (!m) return null;
+  const id = m[1], tabs = {};
+  const fmts = [
+    g => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${g}`,
+    g => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${g}`,
   ];
-  const links = types
-    .filter(t => t.key !== reportType)
-    .map(t => {
-      const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      const dateSlug = new Date().toISOString().slice(0, 7);
-      return `<a class="rc-crosslink" href="${baseUrl}/reports/${slug}/${dateSlug}-${t.key}.html">${t.icon} ${t.label}</a>`;
-    })
-    .join('\n    ');
-  return `<div class="rc-crosslinks">\n    ${links}\n  </div>`;
-}
-
-function fillTemplate(replacements) {
-  let html = HTML_TEMPLATE;
-  for (const [key, value] of Object.entries(replacements)) {
-    html = html.replaceAll(`[${key}]`, value);
-  }
-  return html;
-}
-
-
-// ─── GOOGLE SHEETS (gviz/tq CSV) ────────────────────────────────────────────
-
-async function fetchSheetData(sheetUrl) {
-  // Convert share URL → gviz CSV export
-  let sheetId;
-  const match = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  if (match) sheetId = match[1];
-  else throw new Error('Invalid Google Sheet URL');
-
-  const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`;
-  const resp = await fetch(gvizUrl);
-  if (!resp.ok) throw new Error(`Sheet fetch failed: ${resp.status}`);
-  const csvText = await resp.text();
-  return parseCSV(csvText);
-}
-
-function parseCSV(text) {
-  const lines = text.split('\n').filter(l => l.trim());
-  if (lines.length < 2) return { headers: [], rows: [], latest: [], previous: [] };
-
-  const headers = parseCSVLine(lines[0]);
-  const rows = lines.slice(1).map(parseCSVLine);
-
-  // Filter to latest month and previous month
-  const dateColIdx = headers.findIndex(h =>
-    /date|timestamp|month|period/i.test(h)
-  );
-
-  const curKey = currentMonthKey();
-  const prevKey = previousMonthKey();
-
-  let latest = rows;
-  let previous = [];
-
-  if (dateColIdx >= 0) {
-    latest = rows.filter(r => {
-      const mk = getMonthKey(r[dateColIdx]);
-      return mk === curKey;
-    });
-    previous = rows.filter(r => {
-      const mk = getMonthKey(r[dateColIdx]);
-      return mk === prevKey;
-    });
-    // If no current month data, use most recent available
-    if (latest.length === 0) {
-      const allMonths = [...new Set(rows.map(r => getMonthKey(r[dateColIdx])).filter(Boolean))].sort().reverse();
-      if (allMonths.length >= 1) {
-        latest = rows.filter(r => getMonthKey(r[dateColIdx]) === allMonths[0]);
-        previous = allMonths.length >= 2
-          ? rows.filter(r => getMonthKey(r[dateColIdx]) === allMonths[1])
-          : [];
-      }
+  for (const gid of ["0", "1", "2", "3"]) {
+    for (const fn of fmts) {
+      try {
+        const r = await fetch(fn(gid), { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+        if (!r.ok) continue;
+        const csv = await r.text();
+        if (!csv || csv.length < 50 || csv.includes("<!DOCTYPE")) continue;
+        const fl = csv.split("\n")[0].toLowerCase();
+        let tn = `Tab_gid${gid}`;
+        if (fl.includes("rank") || fl.includes("snapshot") || fl.includes("keyword")) tn = `SERP_gid${gid}`;
+        else if (fl.includes("content") || fl.includes("live url")) tn = `Content_gid${gid}`;
+        const lines = csv.split("\n");
+        if (lines.length > 200) {
+          const hdr = lines[0], dateRows = {};
+          for (let i = 1; i < lines.length; i++) {
+            const d = lines[i].split(",")[0].replace(/"/g, "").trim();
+            if (d && d.match(/\d/)) { if (!dateRows[d]) dateRows[d] = []; dateRows[d].push(lines[i]); }
+          }
+          const sorted = Object.keys(dateRows).sort((a, b) => new Date(b) - new Date(a));
+          const latest = sorted[0], lm = new Date(latest).getMonth(), ly = new Date(latest).getFullYear();
+          let prev = null;
+          for (const d of sorted) { const dt = new Date(d); if (dt.getMonth() !== lm || dt.getFullYear() !== ly) { prev = d; break; } }
+          const filt = [hdr, ...(dateRows[latest] || [])];
+          if (prev && dateRows[prev]) filt.push(...dateRows[prev]);
+          tabs[tn] = filt.join("\n");
+        } else { tabs[tn] = csv; }
+        break;
+      } catch {}
     }
   }
-
-  return { headers, rows, latest, previous };
+  if (!Object.keys(tabs).length) return null;
+  let out = "";
+  for (const [n, c] of Object.entries(tabs)) out += `\n--- ${n} (${c.split("\n").length} rows) ---\n${c}\n`;
+  return out;
 }
 
-function parseCSVLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
-      else if (ch === '"') inQuotes = false;
-      else current += ch;
-    } else {
-      if (ch === '"') inQuotes = true;
-      else if (ch === ',') { result.push(current.trim()); current = ''; }
-      else current += ch;
-    }
-  }
-  result.push(current.trim());
-  return result;
-}
-
-function sheetDataToMarkdown(headers, rows) {
-  if (!rows.length) return '_No data available for this period._';
-  let md = '| ' + headers.join(' | ') + ' |\n';
-  md += '| ' + headers.map(() => '---').join(' | ') + ' |\n';
-  for (const row of rows.slice(0, 50)) { // cap at 50 rows
-    md += '| ' + row.join(' | ') + ' |\n';
-  }
-  return md;
-}
-
-
-// ─── DATAFORSEO: LLM RESPONSES ──────────────────────────────────────────────
-
-async function fetchDataForSEO_LLM(keywords, dfLogin, dfPassword) {
-  const auth = btoa(`${dfLogin}:${dfPassword}`);
-  const llms = ['chat_gpt', 'gemini', 'perplexity'];
-  const results = {};
-
-  for (const llm of llms) {
-    const prompt = `What do you know about ${keywords}? Provide a comprehensive overview including reputation, reviews, controversies, and public perception.`;
-    const payload = [{
-      user_prompt: prompt,
-      model_name: llm === 'chat_gpt' ? 'gpt-4.1-mini' : llm === 'gemini' ? 'gemini-2.5-flash' : 'sonar-reasoning',
-      web_search: true,
-      temperature: 0.3,
-      max_output_tokens: 1024
-    }];
-
-    try {
-      const resp = await fetch(
-        `https://api.dataforseo.com/v3/ai_optimization/${llm}/llm_responses/live`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Basic ${auth}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        }
-      );
-      const data = await resp.json();
-
-      // Parse items → sections → text
-      let fullText = '';
-      const task = data?.tasks?.[0];
-      if (task?.status_code === 20000 && task?.result?.[0]?.items) {
-        for (const item of task.result[0].items) {
-          if (item.sections) {
-            for (const section of item.sections) {
-              if (section.type === 'text' && section.text) {
-                fullText += section.text + '\n\n';
-              }
+async function fetchLLMResponses(keywords, login, password) {
+  const auth = btoa(`${login}:${password}`);
+  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+  const queries = [];
+  for (const kw of kws.slice(0, 2)) { queries.push(`Who is ${kw}?`); queries.push(`What do you know about ${kw}?`); queries.push(`${kw} reputation`); }
+  const results = { chatgpt: [], gemini: [], claude: [], perplexity: [] };
+  const platforms = [
+    { key: "chatgpt", path: "chat_gpt", model: "gpt-4o-mini" },
+    { key: "gemini", path: "gemini", model: "gemini-2.0-flash" },
+    { key: "claude", path: "claude", model: "claude-sonnet-4-20250514" },
+  ];
+  for (const p of platforms) {
+    for (const q of queries.slice(0, 2)) {
+      try {
+        const r = await fetch(`https://api.dataforseo.com/v3/ai_optimization/${p.path}/llm_responses/live`, {
+          method: "POST",
+          headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+          body: JSON.stringify([{ user_prompt: q, model_name: p.model, max_output_tokens: 500, web_search: true }])
+        });
+        if (r.ok) {
+          const d = await r.json();
+          const t = d?.tasks?.[0];
+          if (t?.status_code === 20000 && t?.result) {
+            for (const x of t.result) {
+              let txt = "", anns = [];
+              if (x.items) for (const it of x.items) if (it.sections) for (const s of it.sections) { if (s.text) txt += s.text + "\n"; if (s.annotations) anns.push(...s.annotations); }
+              if (!txt) txt = x.response_text || x.text || "";
+              results[p.key].push({ query: q, response_text: txt, fan_out_queries: x.fan_out_queries || [], annotations: anns.length ? anns : (x.annotations || []), model: p.model });
             }
           }
         }
-      }
-      const modelUsed = task?.result?.[0]?.model_name || llm;
-      results[llm] = { text: fullText.trim(), model: modelUsed };
-    } catch (err) {
-      results[llm] = { text: `Error querying ${llm}: ${err.message}`, model: llm };
+      } catch (e) { results[p.key].push({ query: q, error: e.message }); }
+      await new Promise(r => setTimeout(r, 300));
     }
   }
   return results;
 }
 
+async function fetchSocialData(keywords, env) {
+  // Fetch real social media data via Xpoz API
+  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+  const mainKw = kws[0] || keywords;
+  const data = { twitter: [], reddit: [], instagram: [], errors: [] };
 
-// ─── XPOZ: SOCIAL MEDIA DATA ────────────────────────────────────────────────
+  // Xpoz API base - uses the MCP server endpoint
+  const xpozBase = "https://mcp.xpoz.ai";
 
-async function fetchXpozSocialData(clientName, xpozApiKey) {
-  const baseUrl = 'https://mcp.xpoz.ai';
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${xpozApiKey}`
-  };
-
-  const socialData = { twitter: null, reddit: null, instagram: null };
-
-  // Twitter — search posts by keywords
+  // Twitter search
   try {
-    const twitterResp = await fetch(`${baseUrl}/api/twitter/posts/search`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        query: clientName,
-        responseType: 'fast',
-        fields: ['id', 'text', 'authorUsername', 'createdAtDate', 'likeCount', 'retweetCount', 'replyCount']
-      })
+    const r = await fetch(`${xpozBase}/api/twitter/posts/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keywords: mainKw, max_results: 50 })
     });
-    if (twitterResp.ok) {
-      socialData.twitter = await twitterResp.json();
-    }
-  } catch (e) {
-    socialData.twitter = { error: e.message };
-  }
+    if (r.ok) { const d = await r.json(); data.twitter = d.posts || d.results || d.data || []; }
+  } catch (e) { data.errors.push(`Twitter: ${e.message}`); }
 
-  // Reddit — search posts by keywords
+  // Reddit search
   try {
-    const redditResp = await fetch(`${baseUrl}/api/reddit/posts/search`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        query: clientName,
-        responseType: 'fast',
-        fields: ['id', 'title', 'selftext', 'authorUsername', 'subredditName', 'createdAtDate', 'score', 'commentsCount']
-      })
+    const r = await fetch(`${xpozBase}/api/reddit/posts/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keywords: mainKw, max_results: 30 })
     });
-    if (redditResp.ok) {
-      socialData.reddit = await redditResp.json();
-    }
-  } catch (e) {
-    socialData.reddit = { error: e.message };
+    if (r.ok) { const d = await r.json(); data.reddit = d.posts || d.results || d.data || []; }
+  } catch (e) { data.errors.push(`Reddit: ${e.message}`); }
+
+  // If Xpoz direct API fails, the Claude prompt will use web search context
+  if (!data.twitter.length && !data.reddit.length) {
+    data.note = "Direct API returned no results. Claude should use web search knowledge and any available context to analyze social media presence for this client.";
   }
 
-  // Instagram — search posts by keywords
-  try {
-    const igResp = await fetch(`${baseUrl}/api/instagram/posts/search`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        query: clientName,
-        responseType: 'fast',
-        fields: ['id', 'caption', 'username', 'createdAtDate', 'likeCount', 'commentCount']
-      })
-    });
-    if (igResp.ok) {
-      socialData.instagram = await igResp.json();
-    }
-  } catch (e) {
-    socialData.instagram = { error: e.message };
-  }
-
-  return socialData;
+  return data;
 }
 
-// Alternative: Use Xpoz MCP tools directly (for Claude-in-the-loop)
-function formatSocialDataForPrompt(socialData) {
-  let prompt = '';
+// ═══════════════════════════════════════
+// CLAUDE STREAMING
+// ═══════════════════════════════════════
 
-  if (socialData.twitter?.results?.length) {
-    prompt += '\n\n### Twitter/X Data:\n';
-    for (const t of socialData.twitter.results.slice(0, 30)) {
-      prompt += `- @${t.authorUsername} (${t.createdAtDate}): "${t.text?.slice(0, 200)}..." [❤️${t.likeCount || 0} 🔁${t.retweetCount || 0} 💬${t.replyCount || 0}]\n`;
-    }
-  } else {
-    prompt += '\n\n### Twitter/X Data:\nNo recent Twitter posts found for this entity.\n';
-  }
-
-  if (socialData.reddit?.results?.length) {
-    prompt += '\n\n### Reddit Data:\n';
-    for (const r of socialData.reddit.results.slice(0, 20)) {
-      prompt += `- r/${r.subredditName} by u/${r.authorUsername} (${r.createdAtDate}): "${r.title}" [⬆️${r.score || 0} 💬${r.commentsCount || 0}]\n`;
-      if (r.selftext) prompt += `  Content preview: "${r.selftext?.slice(0, 150)}..."\n`;
-    }
-  } else {
-    prompt += '\n\n### Reddit Data:\nNo recent Reddit posts found for this entity.\n';
-  }
-
-  if (socialData.instagram?.results?.length) {
-    prompt += '\n\n### Instagram Data:\n';
-    for (const ig of socialData.instagram.results.slice(0, 20)) {
-      prompt += `- @${ig.username} (${ig.createdAtDate}): "${ig.caption?.slice(0, 200)}..." [❤️${ig.likeCount || 0} 💬${ig.commentCount || 0}]\n`;
-    }
-  } else {
-    prompt += '\n\n### Instagram Data:\nNo recent Instagram posts found for this entity.\n';
-  }
-
-  return prompt;
-}
-
-
-// ─── CLAUDE STREAMING (SONNET, 64K) ─────────────────────────────────────────
-
-async function streamClaude(systemPrompt, userPrompt, anthropicKey) {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': anthropicKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 64000,
-      stream: true,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
-    })
+async function callClaudeStream(apiKey, system, user) {
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 64000, stream: true, system, messages: [{ role: "user", content: user }] })
   });
-
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Claude API ${resp.status}: ${errText}`);
-  }
-
-  return resp.body; // Return ReadableStream for SSE forwarding
-}
-
-// Non-streaming variant for when we need full text
-async function callClaude(systemPrompt, userPrompt, anthropicKey) {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': anthropicKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 64000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }]
-    })
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Claude API ${resp.status}: ${errText}`);
-  }
-
-  const data = await resp.json();
-  return data.content.map(b => b.text || '').join('');
-}
-
-
-// ─── REPORT SYSTEM PROMPTS ──────────────────────────────────────────────────
-
-const SYSTEM_PROMPTS = {
-  serp: `You are the Reputation Citadel report engine generating a SERP & ORM Analysis report.
-
-OUTPUT FORMAT: Return ONLY the HTML body content (no <html>, <head>, <body> tags). Use these CSS classes:
-- .rc-section wrapping each section, .rc-section-title for headings
-- .rc-table, th, td for data tables
-- .rc-risk .rc-risk--low / .rc-risk--moderate / .rc-risk--elevated for risk badges (plain language: "Low Risk — Stable", "Moderate Risk — Monitor Closely", "Elevated Risk — Immediate Action Needed"). NEVER use weighted numeric scores like "10/15".
-- .rc-actions with <ol> for action items. Each <li> MUST start with "We will..." (not recommendations — commitments)
-- .rc-trend-up, .rc-trend-down, .rc-trend-flat for directional indicators
-
-REPORT STRUCTURE:
-1. Executive Overview (2-3 paragraphs)
-2. SERP Landscape Analysis (table of keyword rankings with trends)
-3. Search Engine Results Composition (owned vs third-party vs negative)
-4. Reputation Risk Assessment (plain language risk level + explanation)
-5. Month-over-Month Changes (if previous data exists, compare; if baseline, state "Baseline month — future reports will track changes")
-6. Action Items (5-7 items, each starting with "We will...")
-
-Be data-driven. Reference specific numbers from the Google Sheets data. Be direct and professional.`,
-
-  llm: `You are the Reputation Citadel report engine generating an LLM Reputation Intelligence report.
-
-OUTPUT FORMAT: Return ONLY the HTML body content. Use the same CSS classes as all Citadel reports:
-- .rc-section, .rc-section-title, .rc-table, .rc-risk, .rc-actions
-- Risk levels in plain language only (Low/Moderate/Elevated + description). NO numeric scores.
-- Action items with "We will..." framing
-
-REPORT STRUCTURE:
-1. Executive Overview — How LLMs currently represent this entity
-2. LLM Response Analysis by Platform (ChatGPT, Gemini, Perplexity) — summarize what each says, noting tone, accuracy, and any concerns
-3. Sentiment & Accuracy Assessment — Are the LLM responses accurate? Favorable? Concerning?
-4. Key Themes & Narratives — What themes dominate LLM responses?
-5. Risk Assessment — Plain language (not numeric)
-6. Month-over-Month Changes (or "Baseline month" if first report)
-7. Action Items (5-7 "We will..." commitments for improving LLM representation)
-
-Analyze the actual LLM response data provided. Be specific about what each LLM says.`,
-
-  social: `You are the Reputation Citadel report engine generating a Social Media Intelligence report.
-
-OUTPUT FORMAT: Return ONLY the HTML body content. Use identical CSS classes:
-- .rc-section, .rc-section-title, .rc-table, .rc-risk, .rc-actions
-- Plain language risk only. "We will..." action items only.
-
-REPORT STRUCTURE:
-1. Executive Overview — Social media reputation snapshot
-2. Twitter/X Analysis — Volume, sentiment, key voices, trending discussions
-3. Reddit Analysis — Subreddit presence, discussion themes, sentiment
-4. Instagram Analysis — Brand mentions, visual content, engagement patterns
-5. Cross-Platform Sentiment Summary (table comparing platforms)
-6. Notable Mentions & Conversations (highlight specific impactful posts)
-7. Risk Assessment — Plain language
-8. Month-over-Month Changes (or "Baseline month")
-9. Action Items (5-7 "We will..." commitments)
-
-Use the REAL social media data provided. Reference actual usernames, post content, engagement metrics. This is an intelligence report, not speculation.`,
-
-  executive: `You are the Reputation Citadel report engine generating an Executive Summary.
-
-OUTPUT FORMAT: Return ONLY the HTML body content. Same CSS classes as all Citadel reports.
-
-This report SYNTHESIZES findings from all three other reports (SERP, LLM, Social). You will receive summaries of each.
-
-REPORT STRUCTURE:
-1. Executive Overview — 3-paragraph synthesis of overall reputation health
-2. Reputation Health Dashboard (table with: Category | Status | Risk Level | Key Finding)
-   Categories: Search Presence, LLM Representation, Social Sentiment, Overall
-3. Critical Findings — Top 3-5 most important discoveries across all reports
-4. Opportunity Matrix — Where the biggest reputation gains can be made
-5. Consolidated Risk Assessment — Overall plain language risk
-6. 90-Day Action Plan — 10 prioritized "We will..." commitments, pulling from all three reports
-7. Next Steps — What happens before next month's report
-
-Be strategic and executive-level. This is for C-suite consumption. Concise but comprehensive.`
-};
-
-
-// ─── REPORT GENERATORS ──────────────────────────────────────────────────────
-
-async function generateSERPReport(clientName, keywords, sheetUrl, previousReport, anthropicKey) {
-  // 1. Fetch Google Sheets data
-  let sheetData = { headers: [], latest: [], previous: [] };
-  let sheetSummary = 'No Google Sheet data available.';
-  if (sheetUrl) {
-    try {
-      sheetData = await fetchSheetData(sheetUrl);
-      const latestMD = sheetDataToMarkdown(sheetData.headers, sheetData.latest);
-      const prevMD = sheetData.previous.length
-        ? sheetDataToMarkdown(sheetData.headers, sheetData.previous)
-        : 'No previous month data available.';
-      sheetSummary = `## Current Month Data (${getReportPeriod()}):\n${latestMD}\n\n## Previous Month Data (${getPreviousMonth()}):\n${prevMD}`;
-    } catch (e) {
-      sheetSummary = `Error fetching sheet: ${e.message}`;
+  if (!r.ok) { const e = await r.text(); throw new Error(`Claude ${r.status}: ${e.substring(0, 200)}`); }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let txt = "", buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() || "";
+    for (const ln of lines) {
+      if (!ln.startsWith("data: ")) continue;
+      const d = ln.slice(6).trim();
+      if (d === "[DONE]") continue;
+      try { const p = JSON.parse(d); if (p.type === "content_block_delta" && p.delta?.type === "text_delta") txt += p.delta.text; } catch {}
     }
   }
-
-  // 2. Build prompt
-  const userPrompt = `Generate the SERP & ORM Analysis report for:
-
-**Client:** ${clientName}
-**Keywords:** ${keywords}
-**Report Period:** ${getReportPeriod()}
-**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — this is the first report. State that future reports will track month-over-month changes.'}
-
-## Google Sheets SERP Tracker Data:
-${sheetSummary}
-
-${previousReport ? `## Previous Report Summary:\n${previousReport}` : ''}
-
-Generate the complete report HTML body now.`;
-
-  return { systemPrompt: SYSTEM_PROMPTS.serp, userPrompt, sheetData };
+  if (!txt) throw new Error("Empty response from Claude");
+  return txt;
 }
 
-async function generateLLMReport(clientName, keywords, dfLogin, dfPassword, previousReport, anthropicKey) {
-  // 1. Fetch DataForSEO LLM responses
-  let llmData = {};
-  let llmSummary = 'No DataForSEO data available.';
-  if (dfLogin && dfPassword) {
-    try {
-      llmData = await fetchDataForSEO_LLM(keywords, dfLogin, dfPassword);
-      llmSummary = '';
-      for (const [platform, data] of Object.entries(llmData)) {
-        const label = platform === 'chat_gpt' ? 'ChatGPT' : platform === 'gemini' ? 'Gemini' : 'Perplexity';
-        llmSummary += `\n### ${label} (${data.model}) Response:\n${data.text || 'No response received.'}\n\n---\n`;
-      }
-    } catch (e) {
-      llmSummary = `Error fetching LLM data: ${e.message}`;
-    }
-  }
+function genTok() { const b = new Uint8Array(16); crypto.getRandomValues(b); return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join(""); }
+function json(d, s = 200) { return new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); }
 
-  const userPrompt = `Generate the LLM Reputation Intelligence report for:
+// ═══════════════════════════════════════
+// SHARED CSS (all report types use this)
+// ═══════════════════════════════════════
 
-**Client:** ${clientName}
-**Keywords:** ${keywords}
-**Report Period:** ${getReportPeriod()}
-**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — first report.'}
+const CSS = `:root{--bg:#fff;--card:#f0f3f8;--card-border:#d4dae6;--navy:#1b2a4a;--navy-light:#2c4170;--red:#c0392b;--amber:#d4880f;--green:#1e8449;--text:#1e293b;--muted:#5a6a85;--border:#d4dae6;--header-bg:#000;--owned-gold:#b8860b;--chatgpt:#10a37f;--claude:#d97706;--gemini:#4285f4;--perplexity:#20808d}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;color:var(--text);background:var(--bg);line-height:1.6}
+h1,h2,h3{font-family:Georgia,serif;color:var(--navy)}
+.header{background:var(--header-bg);padding:32px 48px;display:flex;align-items:center;gap:24px}
+.header img{height:50px}.header .divider{width:1px;height:60px;background:rgba(255,255,255,.3)}
+.header .title{color:#fff}.header h1{font-size:1.6rem;color:#fff;margin-bottom:4px}
+.header .sub{color:#8899b4;font-size:.9rem;font-family:'Segoe UI',sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:32px 24px}
+.sec{margin-bottom:40px}
+.sec-title{font-size:1.3rem;color:var(--navy);border-bottom:3px solid var(--navy);padding-bottom:8px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:10px;padding:24px;margin-bottom:16px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.g2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.st{background:#fff;border:1px solid var(--card-border);border-radius:8px;padding:20px;text-align:center}
+.st .n{font-size:2rem;font-weight:700;font-family:Georgia,serif}
+.st .l{font-size:.75rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-top:4px}
+.n-bl{color:var(--navy)}.n-gr{color:var(--green)}.n-rd{color:var(--red)}.n-am{color:var(--amber)}
+table.dt{width:100%;border-collapse:collapse}
+.dt th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted);padding:10px 12px;background:rgba(27,42,74,.04);border-bottom:2px solid var(--border)}
+.dt td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.88rem}
+.dt a{color:var(--navy);text-decoration:none;border-bottom:1px dotted var(--navy)}
+.tg{display:inline-block;padding:3px 10px;border-radius:4px;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.tg-gr{background:rgba(30,132,73,.12);color:var(--green)}
+.tg-rd{background:rgba(192,57,43,.12);color:var(--red)}
+.tg-am{background:rgba(212,136,15,.12);color:var(--amber)}
+.tg-bl{background:rgba(27,42,74,.12);color:var(--navy)}
+.tg-gd{background:rgba(184,134,11,.12);color:var(--owned-gold)}
+.own-row{border-left:3px solid var(--owned-gold);background:#fdf8ef}
+.neg-row{background:rgba(192,57,43,.05)}
+.pos-row{background:rgba(30,132,73,.05)}
+.mv-up{color:var(--green);font-weight:700}
+.mv-dn{color:var(--red);font-weight:700}
+.mv-st{color:var(--muted)}
+.mv-nw{color:var(--navy);font-style:italic}
+.star{color:var(--owned-gold)}
+.bar-c{display:flex;height:28px;border-radius:6px;overflow:hidden;margin:12px 0}
+.bar-s{display:flex;align-items:center;justify-content:center;color:#fff;font-size:.75rem;font-weight:600}
+.rg{text-align:center;margin:20px 0}
+.rg .sc{font-size:4rem;font-weight:700;font-family:Georgia,serif}
+.rg .lv{font-size:1.1rem;font-weight:600;text-transform:uppercase;letter-spacing:2px;margin-top:4px}
+.rb{height:12px;border-radius:6px;background:linear-gradient(to right,var(--green),var(--amber),var(--red));position:relative;margin:16px 0}
+.rm{width:18px;height:18px;background:var(--navy);border:3px solid #fff;border-radius:50%;position:absolute;top:-3px;transform:translateX(-50%)}
+.rt{width:100%;border-collapse:collapse;margin-top:16px}
+.rt th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted);padding:8px 12px;border-bottom:2px solid var(--border)}
+.rt td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.9rem}
+.qc{background:#fff;border:1px solid var(--card-border);border-radius:10px;padding:24px;margin-bottom:20px}
+.qc h3{font-size:1rem;color:var(--navy);margin-bottom:16px;padding:10px 16px;background:var(--card);border-radius:6px;font-style:italic}
+.pg{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:16px}
+.pb{border:1px solid var(--card-border);border-radius:8px;padding:16px;border-top:3px solid var(--muted)}
+.pb.chatgpt{border-top-color:var(--chatgpt)}.pb.claude{border-top-color:var(--claude)}.pb.gemini{border-top-color:var(--gemini)}.pb.perplexity{border-top-color:var(--perplexity)}
+.pb .pn{font-weight:700;font-size:.8rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.pb .pn.chatgpt{color:var(--chatgpt)}.pb .pn.claude{color:var(--claude)}.pb .pn.gemini{color:var(--gemini)}.pb .pn.perplexity{color:var(--perplexity)}
+.pb p{font-size:.88rem;margin-bottom:8px}
+.thm{font-size:.85rem;color:var(--muted);margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.tl{padding:16px 0 16px 32px;border-left:3px solid var(--navy);position:relative;margin-left:12px}
+.tl::before{content:'';width:12px;height:12px;background:var(--navy);border-radius:50%;position:absolute;left:-7.5px;top:20px}
+.tl.red::before{background:var(--red)}
+.al{list-style:none;counter-reset:a}
+.al li{counter-increment:a;padding:12px 16px 12px 48px;position:relative;border-bottom:1px solid var(--border);font-size:.92rem}
+.al li::before{content:counter(a);position:absolute;left:12px;top:12px;width:24px;height:24px;background:var(--navy);color:#fff;border-radius:50%;text-align:center;line-height:24px;font-size:.75rem;font-weight:700}
+.vr-btn{display:inline-block;margin-top:16px;padding:10px 24px;background:var(--navy);color:#fff;text-decoration:none;border-radius:6px;font-size:.9rem}
+.vr-btn:hover{background:var(--navy-light)}
+.ft{text-align:center;padding:32px 24px;border-top:3px solid var(--navy);margin-top:48px;color:var(--muted);font-size:.85rem}
+.conf{color:var(--red);font-weight:700;text-transform:uppercase;letter-spacing:2px;font-size:.8rem;margin-top:12px}
+@media(max-width:700px){.g3,.g2,.pg{grid-template-columns:1fr}.header{flex-direction:column;text-align:center;padding:24px}}`;
 
-## DataForSEO LLM Response Data:
-${llmSummary}
+// ═══════════════════════════════════════
+// PROMPT BUILDERS
+// ═══════════════════════════════════════
 
-${previousReport ? `## Previous Report Summary:\n${previousReport}` : ''}
+const LOGO = "https://citadel-dashboard.pages.dev/logo.png";
 
-Generate the complete report HTML body now.`;
+function buildUserPrompt(clientName, type, kw, date, data) {
+  return `Client: ${clientName}
+Type: ${type}
+Keywords: ${kw}
+Date: ${date}
 
-  return { systemPrompt: SYSTEM_PROMPTS.llm, userPrompt, llmData };
+${data}
+
+CRITICAL RULES:
+- Output ONLY complete HTML. No markdown fences. No commentary before or after.
+- Fill ALL sections with real data analysis. No placeholders or "data unavailable".
+- Tables must have actual data rows from the provided data.
+- 15,000-40,000 characters minimum for a thorough report.
+- PERIOD: If one date snapshot provided = baseline report (label as that date only). If two date snapshots from different months = monthly comparison report.
+- Reports are monthly, produced on the 1st of each month.`;
 }
 
-async function generateSocialReport(clientName, keywords, xpozApiKey, previousReport, anthropicKey) {
-  // 1. Fetch Xpoz social media data
-  let socialData = { twitter: null, reddit: null, instagram: null };
-  let socialSummary = 'No social media data available.';
+function buildSystemPrompt(type) {
+  const hdr = `<div class="header"><img src="${LOGO}" alt="Reputation Citadel"><div class="divider"></div><div class="title">`;
+  const cssTag = `<style>${CSS}</style>`;
 
-  if (xpozApiKey) {
-    try {
-      socialData = await fetchXpozSocialData(clientName, xpozApiKey);
-      socialSummary = formatSocialDataForPrompt(socialData);
-    } catch (e) {
-      socialSummary = `Error fetching social data: ${e.message}`;
-    }
-  }
-
-  const userPrompt = `Generate the Social Media Intelligence report for:
-
-**Client:** ${clientName}
-**Keywords:** ${keywords}
-**Report Period:** ${getReportPeriod()}
-**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — first report.'}
-
-## Real Social Media Data (collected via Xpoz API):
-${socialSummary}
-
-${previousReport ? `## Previous Report Summary:\n${previousReport}` : ''}
-
-Generate the complete report HTML body now. Reference the REAL data provided above — actual usernames, actual post content, actual engagement numbers.`;
-
-  return { systemPrompt: SYSTEM_PROMPTS.social, userPrompt, socialData };
+  if (type === "serp") return buildSerpPrompt(cssTag, hdr);
+  if (type === "social") return buildSocialPrompt(cssTag, hdr);
+  if (type === "llm") return buildLlmPrompt(cssTag, hdr);
+  return buildExecPrompt(cssTag, hdr);
 }
 
-async function generateExecutiveReport(clientName, keywords, serpSummary, llmSummary, socialSummary, previousReport, anthropicKey) {
-  const userPrompt = `Generate the Executive Summary report for:
+function buildSerpPrompt(css, hdr) {
+  return `You are an ORM analyst for Reputation Citadel. Generate a SERP & ORM Analysis Report in HTML.
 
-**Client:** ${clientName}
-**Keywords:** ${keywords}
-**Report Period:** ${getReportPeriod()}
-**Reporting Context:** ${previousReport ? 'Month-over-month comparison available' : 'Baseline month — first report.'}
+Parse the SERP CSV data. Compute ownership %, sentiment distribution, negative exposure, movement.
+TONE: Client-facing, professional. Use "Mr./Ms. [Last Name]". Negatives are "exposure areas". Encouraging but honest.
 
-## SERP & ORM Report Findings:
-${serpSummary || 'SERP report not yet generated.'}
+USE THIS EXACT HTML STRUCTURE — same classes, same order, every time:
 
-## LLM Intelligence Report Findings:
-${llmSummary || 'LLM report not yet generated.'}
+${css}
 
-## Social Media Intelligence Report Findings:
-${socialSummary || 'Social media report not yet generated.'}
+STRUCTURE (do not deviate):
+${hdr}<h1>SERP &amp; Online Reputation Report</h1><div class="sub"><strong>[CLIENT]</strong> · [KEYWORD] · [DATE]</div></div></div>
+<div class="wrap">
 
-${previousReport ? `## Previous Executive Summary:\n${previousReport}` : ''}
+SEC 1 — Executive Summary: div.sec > h2.sec-title + div.card > p
 
-Synthesize all findings into a comprehensive executive summary.`;
+SEC 2 — Key Metrics Dashboard: div.sec > h2.sec-title + div.g3 (row 1: SERP Results Analyzed n-bl | Owned in Top 10 n-gr | Negative in Top 10 n-rd) + div.g3 (row 2: Positive % n-gr | Negative % n-rd | Page 1 Control % n-bl/n-am/n-gr)
+Each stat: <div class="st"><div class="n [COLOR]">[VALUE]</div><div class="l">[LABEL]</div></div>
 
-  return { systemPrompt: SYSTEM_PROMPTS.executive, userPrompt };
+SEC 3 — Trend Analysis: ONLY if two snapshots from different months. Use dt table with arrows.
+
+SEC 4 — SERP Ownership Map: table.dt with <tr class="own-row/neg-row/pos-row">. Columns: # | Title | Domain | Sentiment (tg) | Owned (★ or blank) | Movement (mv-up/mv-dn/mv-st/mv-nw)
+
+SEC 5 — Sentiment Analysis: div.bar-c > div.bar-s segments (green/muted/red). Below: table.dt (Sentiment tg | Count | % | Key URLs)
+
+SEC 6 — Owned Content Performance: table.dt with own-row. Below: card "Content Created but Not Ranking"
+
+SEC 7 — Negative Exposure Analysis: table.dt with neg-row. Columns: # | Movement | Title | Domain | Category (tg-rd)
+
+SEC 8 — Unowned Positive Results: table.dt with pos-row
+
+SEC 9 — Action Items: ol.al > li using "We will..." framing. 4-6 items max.
+
+</div>
+<div class="ft">Reputation Citadel · SERP & Online Reputation Report · Generated [DATE]<br><div class="conf">Confidential — Prepared for Client Use Only</div></div>
+
+Output ONLY the completed HTML.`;
 }
 
+function buildSocialPrompt(css, hdr) {
+  return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-// ─── MAIN REQUEST HANDLER ───────────────────────────────────────────────────
+You will receive real social media data from Twitter/X and Reddit (collected via Xpoz API). If the data is sparse, supplement with your knowledge but note this clearly. Categorize posts by sentiment, identify key voices, build timeline, assess risk.
 
-export async function onRequest(context) {
-  const { request, env } = context;
+TONE: Professional, neutral. "Mr./Ms. [Last Name]". Sanitize profanity with [expletive]. No inflammatory words (firestorm, toxic, slammed). Use: heightened scrutiny, concerns raised, online discussion.
 
-  // CORS
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-      }
-    });
-  }
+USE THIS EXACT HTML STRUCTURE:
 
-  if (request.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'POST only' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
+${css}
 
-  try {
-    const body = await request.json();
-    const {
-      reportType, // 'serp' | 'llm' | 'social' | 'executive' | 'all'
-      clientName,
-      keywords,
-      sheetUrl,
-      previousReport,
-      anthropicKey,
-      dfLogin,
-      dfPassword,
-      xpozApiKey,
-      // For executive: pre-generated summaries
-      serpSummary,
-      llmSummary,
-      socialSummary,
-      stream = true  // Default to streaming
-    } = body;
+STRUCTURE:
+${hdr}<h1>Social Media Intelligence Report</h1><div class="sub"><strong>[CLIENT]</strong> · [PLATFORMS] · [DATE]</div></div></div>
+<div class="wrap">
 
-    if (!clientName || !anthropicKey) {
-      return new Response(JSON.stringify({ error: 'clientName and anthropicKey required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
+SEC 1 — Executive Summary: div.card > p
 
-    const baseUrl = 'https://citadel-dashboard.pages.dev';
+SEC 2 — Key Metrics: two div.g3 rows of div.st
+Row 1: Posts Found (n-bl) | Negative Sentiment % (n-rd) | Total Impressions (n-am)
+Row 2: Platforms Analyzed (n-bl) | Key Voices Identified (n-bl) | Risk Level (n-gr/n-am/n-rd)
 
-    // ── GENERATE ALL FLOW ──
-    if (reportType === 'all') {
-      return handleGenerateAll(body, baseUrl);
-    }
+SEC 3 — Sentiment Analysis: div.bar-c + table.dt (Category | Sentiment tg | Volume | Themes)
 
-    // ── SINGLE REPORT ──
-    let reportConfig;
+SEC 4 — Most Engaged Posts: table.dt (Date | Author | Platform | Engagement | Summary)
 
-    switch (reportType) {
-      case 'serp':
-        reportConfig = await generateSERPReport(clientName, keywords, sheetUrl, previousReport, anthropicKey);
-        break;
-      case 'llm':
-        reportConfig = await generateLLMReport(clientName, keywords, dfLogin, dfPassword, previousReport, anthropicKey);
-        break;
-      case 'social':
-        reportConfig = await generateSocialReport(clientName, keywords, xpozApiKey, previousReport, anthropicKey);
-        break;
-      case 'executive':
-        reportConfig = await generateExecutiveReport(clientName, keywords, serpSummary, llmSummary, socialSummary, previousReport, anthropicKey);
-        break;
-      default:
-        return new Response(JSON.stringify({ error: `Invalid reportType: ${reportType}` }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-    }
+SEC 5 — Timeline of Key Events: div.tl items (use class="tl red" for crisis moments)
 
-    if (stream) {
-      // Stream Claude response as SSE
-      return handleStreamedReport(reportConfig, reportType, clientName, anthropicKey, baseUrl);
-    } else {
-      // Non-streaming: return complete HTML
-      return handleCompleteReport(reportConfig, reportType, clientName, anthropicKey, baseUrl);
-    }
+SEC 6 — Risk Analysis: div.rb (gradient bar) with div.rm (marker at left:XX%). Below: div.g2 for Critical/Elevated risks. div.card for Mitigating Factors.
 
-  } catch (err) {
-    return new Response(JSON.stringify({ error: err.message, stack: err.stack }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
-  }
+SEC 7 — Key Voices: table.dt (Account | Platform | Sentiment tg | Reach/Followers)
+
+SEC 8 — Platform Breakdown: div.g2 > div.card per platform with stats
+
+SEC 9 — Action Items: ol.al > li with "We will..." framing. 4-6 items.
+
+</div>
+<div class="ft">Reputation Citadel · Social Media Intelligence Report · Generated [DATE]<br><div class="conf">Confidential — Prepared for Client Use Only</div></div>
+
+Output ONLY the completed HTML.`;
 }
 
-// ── STREAMED REPORT (SSE) ────────────────────────────────────────────────────
+function buildLlmPrompt(css, hdr) {
+  return `You are an AI Reputation Intelligence analyst for Reputation Citadel. Generate an LLM Reputation Intelligence Report in HTML.
 
-async function handleStreamedReport(config, reportType, clientName, anthropicKey, baseUrl) {
-  const claudeStream = await streamClaude(config.systemPrompt, config.userPrompt, anthropicKey);
+Analyze how ChatGPT, Claude, Gemini, Perplexity represent the client. Classify sentiment per platform (Positive/Neutral/Mixed/Negative). Analyze fan-out queries. Track sources. Compute AI Risk Score 1-100 (0-25 LOW green, 26-50 MODERATE amber, 51-75 HIGH red, 76-100 CRITICAL red).
 
-  const reportLabels = {
-    serp: 'SERP & ORM Analysis',
-    llm: 'LLM Reputation Intelligence',
-    social: 'Social Media Intelligence',
-    executive: 'Executive Summary'
-  };
+Risk Score factors: negative sentiment prevalence (30%), prominence of negative content (25%), dangerous fan-out queries (15%), negative source frequency (15%), cross-platform consistency of negatives (15%).
 
-  // Transform Claude's SSE into our own SSE with template wrapping
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
+TONE: Professional. "Mr./Ms. [Last Name]". Negatives = "exposure" or "narrative risk".
 
-  // Process Claude stream in background
-  (async () => {
-    const reader = claudeStream.getReader();
-    const decoder = new TextDecoder();
-    let fullBody = '';
-    let buffer = '';
+USE THIS EXACT HTML STRUCTURE:
 
-    try {
-      // Send initial metadata
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'meta', reportType, clientName })}\n\n`));
+${css}
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+STRUCTURE:
+${hdr}<h1>LLM Reputation Intelligence Report</h1><div class="sub"><strong>[CLIENT]</strong> · ChatGPT, Claude, Gemini, Perplexity · [DATE]</div></div></div>
+<div class="wrap">
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+SEC 1 — Executive Summary: div.card > p
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
+SEC 2 — AI Reputation Risk Score: div.card > div.rg (div.sc [SCORE] + div.lv [LEVEL]) + div.rb with div.rm at left:[SCORE]%. Below: table.rt — columns: Risk Factor | Finding (PLAIN LANGUAGE like "2 dangerous queries found", "Negative on 3 of 4 platforms") | Level (tg-gr Low / tg-am Medium / tg-rd High). NEVER show weighted scores like "10/15".
 
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-                fullBody += parsed.delta.text;
-                await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'delta', text: parsed.delta.text })}\n\n`));
-              }
-            } catch { /* skip non-JSON lines */ }
-          }
-        }
-      }
+SEC 3 — Key Metrics: two div.g3 rows of div.st
+Row 1: Queries Analyzed (n-bl) | Platforms Covered (n-bl) | Overall Sentiment (n-gr/n-am/n-rd)
+Row 2: Owned Sources Cited % (n-gr/n-am) | Negative Narratives (n-rd) | Dangerous Fan-Out Queries (n-rd)
 
-      // Send complete HTML
-      const crossLinks = buildCrossLinks(reportType, clientName, baseUrl);
-      const finalHtml = fillTemplate({
-        REPORT_TITLE: reportLabels[reportType],
-        CLIENT_NAME: clientName,
-        REPORT_PERIOD: getReportPeriod(),
-        GENERATED_DATE: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-        REPORT_TYPE_LABEL: reportLabels[reportType],
-        REPORT_BODY: fullBody,
-        CROSS_LINKS: crossLinks
-      });
+SEC 4 — Cross-Platform Sentiment Matrix: table.dt — Query | ChatGPT (tg) | Claude (tg) | Gemini (tg) | Perplexity (tg) | Consistency. Below: "Most Favorable: X · Most Negative: X · Average: X%"
 
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'complete', html: finalHtml, body: fullBody })}\n\n`));
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-    } catch (err) {
-      await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`));
-    } finally {
-      await writer.close();
-    }
-  })();
+SEC 5 — LLM Response Analysis: FOR EACH QUERY: div.qc > h3 "[query]" + div.pg with 4x div.pb (classes chatgpt/claude/gemini/perplexity) each with div.pn + p + tg. After grid: div.thm with Themes + Sources.
 
-  return new Response(readable, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*'
-    }
-  });
+SEC 6 — Fan-Out Query Analysis: table.dt (Query | Platform | Intent | Risk tg). Below: "Content Opportunities: ..."
+
+SEC 7 — Source & Ownership: table.dt (Domain | Frequency | Owned | Sentiment tg) + div.g3 stats (Total / Owned % / Negative)
+
+SEC 8 — Negative Content Propagation: Per source: domain (bold red) + description + "Platforms: X · Prominence: HIGH/MED/LOW". Bottom: Propagation Score.
+
+SEC 9 — Action Items: ol.al > li with "We will..." framing. 4-6 items.
+
+</div>
+<div class="ft">Reputation Citadel · LLM Reputation Intelligence Report · Generated [DATE]<br>Platforms: ChatGPT, Claude, Gemini, Perplexity<br><div class="conf">Confidential — Prepared for Client Use Only</div></div>
+
+Output ONLY the completed HTML.`;
 }
 
-// ── COMPLETE REPORT (NON-STREAMING) ──────────────────────────────────────────
+function buildExecPrompt(css, hdr) {
+  return `You are a senior ORM analyst for Reputation Citadel generating an Executive Summary Report.
+Synthesize SERP, social media, and LLM findings into a concise C-suite brief. TONE: Professional. "Mr./Ms. [Last Name]".
 
-async function handleCompleteReport(config, reportType, clientName, anthropicKey, baseUrl) {
-  const reportLabels = {
-    serp: 'SERP & ORM Analysis',
-    llm: 'LLM Reputation Intelligence',
-    social: 'Social Media Intelligence',
-    executive: 'Executive Summary'
-  };
+USE THIS EXACT HTML STRUCTURE:
 
-  const body = await callClaude(config.systemPrompt, config.userPrompt, anthropicKey);
-  const crossLinks = buildCrossLinks(reportType, clientName, baseUrl);
+${css}
 
-  const html = fillTemplate({
-    REPORT_TITLE: reportLabels[reportType],
-    CLIENT_NAME: clientName,
-    REPORT_PERIOD: getReportPeriod(),
-    GENERATED_DATE: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-    REPORT_TYPE_LABEL: reportLabels[reportType],
-    REPORT_BODY: body,
-    CROSS_LINKS: crossLinks
-  });
+STRUCTURE:
+${hdr}<h1>Executive Summary Report</h1><div class="sub"><strong>[CLIENT]</strong> · [DATE]</div></div></div>
+<div class="wrap">
 
-  return new Response(JSON.stringify({ html, body, reportType }), {
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*'
-    }
-  });
-}
+SEC 1 — Executive Overview: div.card > p (high-level summary)
 
-// ── GENERATE ALL FLOW: SERP → LLM → SOCIAL → EXECUTIVE ─────────────────────
+SEC 2 — SERP Snapshot: div.card with div.g3 stats + analysis paragraph. If SERP URL provided: <a href="[URL]" target="_blank" class="vr-btn">View Full SERP Report &rarr;</a>
 
-async function handleGenerateAll(params, baseUrl) {
-  const { clientName, keywords, sheetUrl, previousReport, anthropicKey, dfLogin, dfPassword, xpozApiKey } = params;
+SEC 3 — Social Media Snapshot: div.card with stats + analysis. If Social URL provided: vr-btn link.
 
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
+SEC 4 — AI/LLM Reputation Snapshot: div.card with risk score + analysis. If LLM URL provided: vr-btn link.
 
-  const send = async (data) => {
-    await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-  };
+SEC 5 — Combined Risk Assessment: div.card with overall assessment
 
-  const reportLabels = {
-    serp: 'SERP & ORM Analysis',
-    llm: 'LLM Reputation Intelligence',
-    social: 'Social Media Intelligence',
-    executive: 'Executive Summary'
-  };
+SEC 6 — Action Items: ol.al > li with "We will..." framing. 4-6 items.
 
-  (async () => {
-    const reports = {};
-    const order = ['serp', 'llm', 'social', 'executive'];
+</div>
+<div class="ft">Reputation Citadel · Executive Summary Report · Generated [DATE]<br><div class="conf">Confidential — Prepared for Client Use Only</div></div>
 
-    try {
-      for (const type of order) {
-        await send({ type: 'status', report: type, status: 'generating', label: reportLabels[type] });
-
-        let config;
-        switch (type) {
-          case 'serp':
-            config = await generateSERPReport(clientName, keywords, sheetUrl, previousReport, anthropicKey);
-            break;
-          case 'llm':
-            config = await generateLLMReport(clientName, keywords, dfLogin, dfPassword, previousReport, anthropicKey);
-            break;
-          case 'social':
-            config = await generateSocialReport(clientName, keywords, xpozApiKey, previousReport, anthropicKey);
-            break;
-          case 'executive':
-            config = await generateExecutiveReport(
-              clientName, keywords,
-              reports.serp?.body || '',
-              reports.llm?.body || '',
-              reports.social?.body || '',
-              previousReport, anthropicKey
-            );
-            break;
-        }
-
-        // Generate report (non-streaming for sequential flow)
-        const body = await callClaude(config.systemPrompt, config.userPrompt, anthropicKey);
-        const crossLinks = buildCrossLinks(type, clientName, baseUrl);
-        const html = fillTemplate({
-          REPORT_TITLE: reportLabels[type],
-          CLIENT_NAME: clientName,
-          REPORT_PERIOD: getReportPeriod(),
-          GENERATED_DATE: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-          REPORT_TYPE_LABEL: reportLabels[type],
-          REPORT_BODY: body,
-          CROSS_LINKS: crossLinks
-        });
-
-        reports[type] = { html, body };
-
-        await send({
-          type: 'report_complete',
-          report: type,
-          label: reportLabels[type],
-          html,
-          bodyPreview: body.slice(0, 500)
-        });
-      }
-
-      await send({ type: 'all_complete', reports: Object.keys(reports) });
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-    } catch (err) {
-      await send({ type: 'error', message: err.message });
-    } finally {
-      await writer.close();
-    }
-  })();
-
-  return new Response(readable, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*'
-    }
-  });
+Output ONLY the completed HTML.`;
 }
