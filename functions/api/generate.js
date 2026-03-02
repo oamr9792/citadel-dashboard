@@ -134,20 +134,62 @@ async function fetchGoogleSheet(sheetUrl) {
 // ── DataForSEO ──
 async function fetchLLMResponses(keywords, clientName, login, password) {
   const auth = btoa(`${login}:${password}`);
-  const kws = keywords.split(",").map(k=>k.trim()).filter(Boolean);
-  const queries = []; for (const kw of kws.slice(0,2)) { queries.push(`Who is ${kw}?`); queries.push(`What do you know about ${kw}?`); }
-  const results = { chatgpt:[], gemini:[], claude:[], perplexity:[] };
-  const platforms = [{key:"chatgpt",path:"chat_gpt",model:"gpt-4o-mini"},{key:"gemini",path:"gemini",model:"gemini-2.0-flash"},{key:"claude",path:"claude",model:"claude-sonnet-4-20250514"}];
+  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+
+  // Build reputation-relevant queries
+  const queries = [];
+  for (const kw of kws.slice(0, 2)) {
+    queries.push(`Who is ${kw}?`);
+    queries.push(`What do you know about ${kw}?`);
+    queries.push(`${kw} reputation`);
+    queries.push(`${kw} reviews`);
+  }
+  const uniqueQueries = [...new Set(queries)];
+
+  const results = { chatgpt: [], gemini: [], claude: [], perplexity: [] };
+  const platforms = [
+    { key: "chatgpt", path: "chat_gpt", model: "gpt-4o-mini" },
+    { key: "gemini", path: "gemini", model: "gemini-2.0-flash" },
+    { key: "claude", path: "claude", model: "claude-sonnet-4-20250514" },
+    { key: "perplexity", path: "perplexity", model: "sonar" },
+  ];
+
+  // Send up to 3 queries per platform
   for (const p of platforms) {
-    for (const q of queries.slice(0,1)) {
+    for (const q of uniqueQueries.slice(0, 3)) {
       try {
         const r = await fetch(`https://api.dataforseo.com/v3/ai_optimization/${p.path}/llm_responses/live`, {
-          method:"POST", headers:{Authorization:`Basic ${auth}`,"Content-Type":"application/json"},
-          body: JSON.stringify([{user_prompt:q,model_name:p.model,max_output_tokens:500,web_search:true}])
+          method: "POST",
+          headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+          body: JSON.stringify([{ user_prompt: q, model_name: p.model, max_output_tokens: 1000, web_search: true }]),
         });
-        if (r.ok) { const d = await r.json(); const t = d?.tasks?.[0]; if (t?.status_code===20000&&t?.result) for (const x of t.result) results[p.key].push({query:q,response_text:x.response_text||x.text||"",fan_out_queries:x.fan_out_queries||[],citations:x.citations||x.references||[],model:p.model}); }
-      } catch(e) { results[p.key].push({query:q,error:e.message}); }
-      await new Promise(r=>setTimeout(r,300));
+        if (r.ok) {
+          const d = await r.json();
+          const t = d?.tasks?.[0];
+          if (t?.status_code === 20000 && t?.result) {
+            for (const x of t.result) {
+              // Extract text from items->sections structure
+              let responseText = "";
+              let annotations = [];
+              if (x.items && x.items.length > 0) {
+                for (const item of x.items) {
+                  if (item.sections) {
+                    for (const sec of item.sections) {
+                      if (sec.text) responseText += sec.text + "\n";
+                      if (sec.annotations) annotations.push(...sec.annotations);
+                    }
+                  }
+                }
+              }
+              if (!responseText) responseText = x.response_text || x.text || "";
+              results[p.key].push({ query: q, response_text: responseText, fan_out_queries: x.fan_out_queries || [], annotations: annotations.length ? annotations : (x.annotations || x.citations || x.references || []), model: p.model });
+            }
+          } else if (t) {
+            results[p.key].push({ query: q, response_text: t.status_message || "No response", fan_out_queries: [], citations: [], model: p.model, status: t.status_code });
+          }
+        }
+      } catch (e) { results[p.key].push({ query: q, error: e.message, model: p.model }); }
+      await new Promise(r => setTimeout(r, 500));
     }
   }
   return results;
