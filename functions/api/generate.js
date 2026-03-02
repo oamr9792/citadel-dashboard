@@ -479,7 +479,7 @@ ${logoInstruction}
 
 Sections:
 1. Executive Summary — platforms analyzed, queries tested, risk score, key findings, top recommendation.
-2. AI Reputation Risk Score — large visual gauge 1-100 with green/amber/red. Five risk factor breakdown.
+2. AI Reputation Risk Score — large visual gauge 1-100 with green/amber/red. Below the gauge, show a simple breakdown table of the five risk factors. For each factor show: Factor Name | Finding (in plain language, e.g., "2 dangerous queries found", "Negative sentiment on 3 of 4 platforms") | Risk Level (Low/Medium/High). Do NOT show raw weighted scores like "10/15" — these are confusing to clients. Show human-readable findings instead.
 3. Key Metrics Dashboard — grid3: Row 1: Queries Analyzed | Platforms Covered | Overall Sentiment. Row 2: Owned Sources Cited % | Negative Narratives Found | Dangerous Fan-Out Queries.
 4. Cross-Platform Sentiment Matrix — query × platform color-coded cells + Consistency Score column.
 5. LLM Response Analysis per query — query text, side-by-side summaries, sentiment per platform, themes, fan-out queries with risk flags, sources with owned indicators.
