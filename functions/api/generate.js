@@ -220,7 +220,7 @@ async function fetchLLMResponses(keywords, clientName, login, password) {
   ];
 
   for (const platform of platforms) {
-    for (const query of queries.slice(0, 3)) {
+    for (const query of queries.slice(0, 1)) {
       try {
         const resp = await fetch(
           `https://api.dataforseo.com/v3/ai_optimization/${platform.path}/llm_responses/live`,
@@ -283,8 +283,8 @@ async function callClaude(apiKey, systemPrompt, userPrompt) {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 16000,
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 8000,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     }),
