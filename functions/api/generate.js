@@ -32,7 +32,7 @@ export async function onRequestPost(context) {
 
     // Get logo from KV
     let logoDataUri = "";
-    try { const s = await env.CITADEL_KV.get("logo-base64"); if (s) logoDataUri = `data:image/png;base64,${s}`; } catch {}
+    try { const s = await env.CITADEL_KV.get("logo-base64"); if (s) logoDataUri = `data:image/jpeg;base64,${s}`; } catch {}
 
     const systemPrompt = getSystemPrompt(type, logoDataUri);
     const userPrompt = `Client Name: ${clientName}\nReport Type: ${type}\nKeywords: ${keywords || "N/A"}\nReport Date: ${reportDate}\n\n${dataPayload}\n\nGenerate the complete HTML report now. Output ONLY the HTML — no markdown fences, no commentary.`;
