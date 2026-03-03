@@ -26,8 +26,28 @@ export async function onRequestPost(context) {
       dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(ld, null, 2)}\n`;
     }
     if (type === "social" || type === "executive") {
-      const sd = await fetchSocialData(kw, clientName, env.XPOZ_API_KEY);
-      dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
+      if (body.socialData && (body.socialData.twitter || body.socialData.reddit)) {
+        // Pre-collected Xpoz data from frontend
+        dataPayload += `\n=== XPOZ SOCIAL MEDIA DATA ===\n`;
+        dataPayload += `Timeframe: ${body.socialData.metadata?.startDate || 'N/A'} to ${body.socialData.metadata?.endDate || 'N/A'} (${body.timeframeDays || 30} days)\n`;
+        dataPayload += `Summary: ${body.socialData.summary}\n`;
+        if (body.socialData.twitter && body.socialData.twitter.length) {
+          dataPayload += `\n--- TWITTER/X POSTS (${body.socialData.twitter.length}) ---\n`;
+          dataPayload += JSON.stringify(body.socialData.twitter.slice(0, 100), null, 2) + "\n";
+        }
+        if (body.socialData.reddit && body.socialData.reddit.length) {
+          dataPayload += `\n--- REDDIT POSTS (${body.socialData.reddit.length}) ---\n`;
+          dataPayload += JSON.stringify(body.socialData.reddit.slice(0, 100), null, 2) + "\n";
+        }
+        if (body.socialData.instagram && body.socialData.instagram.length) {
+          dataPayload += `\n--- INSTAGRAM POSTS (${body.socialData.instagram.length}) ---\n`;
+          dataPayload += JSON.stringify(body.socialData.instagram.slice(0, 50), null, 2) + "\n";
+        }
+      } else {
+        // Fallback: fetch Reddit directly + use Claude web search
+        const sd = await fetchSocialData(kw, clientName);
+        dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
+      }
     }
     if (type === "executive" && linkedReports) {
       const base = new URL(request.url).origin;
@@ -569,7 +589,11 @@ Output ONLY the completed HTML.`;
 function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-DATA PROVIDED: You receive real social media data collected via the Xpoz platform — including Twitter/X posts with engagement metrics, Reddit posts and comments. Analyze ALL provided data thoroughly. If web_search is available, use it to supplement with recent news articles.
+DATA PROVIDED: You receive real social media data collected via the Xpoz platform — including Twitter/X posts with engagement metrics, Reddit posts and comments, and possibly Instagram posts. Analyze ALL provided data thoroughly. If web_search is available, use it to supplement with recent news articles.
+
+CRITICAL — POST LINKS: Every time you mention a specific post, tweet, or Reddit thread in the report, you MUST link directly to it. Use the "url" field from the data. For Twitter: https://x.com/{authorUsername}/status/{id}. For Reddit: https://reddit.com{permalink}. For Instagram: use the codeUrl field. Wrap titles/excerpts in <a href="URL" target="_blank"> tags. The "Most Engaged Posts" table and any inline references MUST be clickable links.
+
+TIMEFRAME: The data covers a specific date range provided in the metadata. Reference this timeframe in the report header and executive summary (e.g., "Analysis Period: Feb 1 - Mar 1, 2026").
 
 Categorize every mention by sentiment: Positive, Neutral/Mixed, Negative. Identify the top most-engaged posts. Identify key voices. Build a timeline. Assess risk: Low / Medium / Elevated / High / Critical.
 
@@ -591,7 +615,7 @@ Row 2: Platforms Analyzed (n-bl) | Key Voices Identified (n-bl) | Risk Level (n-
 
 SEC 3 — Sentiment Analysis: div.bar-c + table.dt (Category | Sentiment tg | Volume | Themes)
 
-SEC 4 — Most Engaged Posts: table.dt (Date | Author | Platform | Engagement | Summary)
+SEC 4 — Most Engaged Posts: table.dt (Date | Author | Platform | Engagement | Post). The "Post" column MUST be a clickable <a href="[post url]" target="_blank"> link with a short excerpt or title. Every row must link to the actual post.
 
 SEC 5 — Timeline of Key Events: div.tl items (use class="tl red" for crisis moments)
 
