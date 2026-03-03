@@ -26,14 +26,29 @@ export async function onRequestPost(context) {
       dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(ld, null, 2)}\n`;
     }
     if (type === "social" || type === "executive") {
-      const xpozKey = body.xpozToken || env.XPOZ_API_KEY;
-      const tfDays = body.timeframeDays || 30;
+      let xpozKey = body.xpozToken || env.XPOZ_API_KEY;
       if (!xpozKey) {
-        // No Xpoz token — use Reddit public API fallback
+        try {
+          const stored = await env.CITADEL_KV.get("xpoz-oauth-token");
+          if (stored) xpozKey = JSON.parse(stored).access_token;
+        } catch {}
+      }
+      const tfDays = body.timeframeDays || 30;
+      if (xpozKey) {
+        // Collect data directly from Xpoz MCP (fast, ~15s)
+        try {
+          const sd = await fetchXpozDirect(kw, clientName, xpozKey, tfDays);
+          dataPayload += `\n=== SOCIAL MEDIA DATA (from Xpoz) ===\n${JSON.stringify(sd, null, 2)}\n`;
+        } catch (e) {
+          dataPayload += `\n=== SOCIAL MEDIA DATA ===\nXpoz collection error: ${e.message}\n`;
+          // Fallback to Reddit public API
+          const sd = await fetchSocialDataFallback(kw, clientName);
+          dataPayload += JSON.stringify(sd, null, 2) + "\n";
+        }
+      } else {
         const sd = await fetchSocialDataFallback(kw, clientName);
         dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
       }
-      // If xpozKey exists, we'll pass Xpoz as MCP server to Claude (handled below)
       dataPayload += `\nTimeframe for social analysis: last ${tfDays} days (${new Date(Date.now() - tfDays * 86400000).toISOString().split("T")[0]} to ${new Date().toISOString().split("T")[0]})\n`;
     }
     if (type === "executive" && linkedReports) {
@@ -53,21 +68,8 @@ export async function onRequestPost(context) {
     if (!env.ANTHROPIC_API_KEY) return json({ error: "No API key" }, 400);
 
     let html;
-    let xpozKey = body.xpozToken || env.XPOZ_API_KEY;
-    // Also check KV for stored OAuth token
-    if (!xpozKey) {
-      try {
-        const stored = await env.CITADEL_KV.get("xpoz-oauth-token");
-        if (stored) { xpozKey = JSON.parse(stored).access_token; }
-      } catch {}
-    }
-    if ((type === "social" || type === "executive") && xpozKey) {
-      // Social/Executive with Xpoz: use Claude API MCP connector so Claude can query Xpoz directly
-      html = await callClaudeWithXpoz(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt, xpozKey);
-    } else {
-      // All other reports: streaming
-      html = await callClaudeStream(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
-    }
+    // All reports use streaming — social data is pre-collected above
+    html = await callClaudeStream(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
     html = html.trim();
     if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
 
@@ -252,169 +254,158 @@ async function callClaudeWithWebSearch(apiKey, system, userContent) {
   return finalText;
 }
 
-// Call Claude with Xpoz MCP connector + web search — Claude queries Xpoz natively
-async function callClaudeWithXpoz(apiKey, system, userContent, xpozToken) {
-  const messages = [{ role: "user", content: userContent }];
-  let finalText = "";
+// ── Direct Xpoz MCP client — fast data collection (~15s) ──
+class XpozMCP {
+  constructor(token) { this.token = token; this.sid = null; this.idCounter = 0; }
 
-  for (let turn = 0; turn < 25; turn++) {
-    const reqBody = {
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 16000,
-      system,
-      messages,
-      tools: [
-        { type: "web_search_20250305", name: "web_search" },
-        {
-          type: "mcp_toolset",
-          mcp_server_name: "xpoz",
-          allowed_tools: [
-            "getTwitterPostsByKeywords",
-            "getRedditPostsByKeywords",
-            "getInstagramPostsByKeywords"
-          ]
-        }
-      ],
-      mcp_servers: [
-        {
-          type: "url",
-          url: "https://mcp.xpoz.ai/mcp",
-          name: "xpoz",
-          authorization_token: xpozToken
-        }
-      ]
-    };
-
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "mcp-client-2025-11-20"
-      },
-      body: JSON.stringify(reqBody)
+  async rpc(method, params = {}) {
+    const hdrs = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": `Bearer ${this.token}` };
+    if (this.sid) hdrs["Mcp-Session-Id"] = this.sid;
+    const r = await fetch("https://mcp.xpoz.ai/mcp", {
+      method: "POST", headers: hdrs,
+      body: JSON.stringify({ jsonrpc: "2.0", id: String(++this.idCounter), method, params })
     });
-
-    if (!r.ok) {
-      const errText = await r.text();
-      // If new beta header fails, try old format
-      if (r.status === 400 && turn === 0) {
-        return await callClaudeWithXpozLegacy(apiKey, system, userContent, xpozToken);
-      }
-      throw new Error(`Claude API ${r.status}: ${errText.substring(0, 500)}`);
-    }
-    const data = await r.json();
-
-    // Collect text from this turn
-    for (const block of data.content) {
-      if (block.type === "text") finalText += block.text;
-    }
-
-    // If Claude is done, break
-    if (data.stop_reason === "end_turn") break;
-
-    // For tool_use stop reason, continue the agentic loop
-    if (data.stop_reason === "tool_use") {
-      messages.push({ role: "assistant", content: data.content });
-
-      // Build tool results for any blocks that need them
-      const results = [];
-      for (const block of data.content) {
-        if (block.type === "tool_use") {
-          results.push({ type: "tool_result", tool_use_id: block.id, content: "Executed." });
+    const newSid = r.headers.get("Mcp-Session-Id");
+    if (newSid) this.sid = newSid;
+    const ct = r.headers.get("Content-Type") || "";
+    if (ct.includes("text/event-stream")) {
+      const text = await r.text();
+      for (const line of text.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try { const p = JSON.parse(line.slice(6)); if (p.result) return p.result; if (p.error) throw new Error(JSON.stringify(p.error)); } catch (e) { if (e.message.includes("error")) throw e; }
         }
       }
-      if (results.length > 0) {
-        messages.push({ role: "user", content: results });
-      } else {
-        messages.push({ role: "user", content: [{ type: "text", text: "Continue." }] });
-      }
-      continue;
+      return null;
     }
-
-    // Any other stop reason — done
-    break;
+    if (!r.ok) { const e = await r.text(); throw new Error(`Xpoz ${r.status}: ${e.substring(0, 300)}`); }
+    const data = await r.json();
+    if (data.error) throw new Error(`Xpoz: ${JSON.stringify(data.error)}`);
+    return data.result || data;
   }
 
-  if (!finalText) throw new Error("Empty response from Claude with Xpoz");
-  return finalText;
+  async init() {
+    const result = await this.rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "citadel", version: "1.0" } });
+    // Send initialized notification
+    await fetch("https://mcp.xpoz.ai/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.token}`, ...(this.sid ? { "Mcp-Session-Id": this.sid } : {}) },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+    });
+    return result;
+  }
+
+  async callTool(name, args) {
+    const result = await this.rpc("tools/call", { name, arguments: args });
+    if (!result) return null;
+    // Extract text content from MCP tool result
+    if (result.content && Array.isArray(result.content)) {
+      for (const block of result.content) {
+        if (block.type === "text" && block.text) {
+          try { return JSON.parse(block.text); } catch { return block.text; }
+        }
+      }
+    }
+    return result;
+  }
 }
 
-// Legacy format fallback using mcp-client-2025-04-04 beta header
-async function callClaudeWithXpozLegacy(apiKey, system, userContent, xpozToken) {
-  const messages = [{ role: "user", content: userContent }];
-  let finalText = "";
+async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 30) {
+  const mcp = new XpozMCP(xpozToken);
+  await mcp.init();
 
-  for (let turn = 0; turn < 25; turn++) {
-    const reqBody = {
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 16000,
-      system,
-      messages,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      mcp_servers: [
-        {
-          type: "url",
-          url: "https://mcp.xpoz.ai/mcp",
-          name: "xpoz",
-          authorization_token: xpozToken,
-          tool_configuration: {
-            enabled: true,
-            allowed_tools: [
-              "getTwitterPostsByKeywords",
-              "getRedditPostsByKeywords",
-              "getInstagramPostsByKeywords"
-            ]
-          }
-        }
-      ]
-    };
+  const endDate = new Date().toISOString().split("T")[0];
+  const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
+  const data = { twitter_posts: [], reddit_posts: [], instagram_posts: [], summary: "" };
 
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "mcp-client-2025-04-04"
-      },
-      body: JSON.stringify(reqBody)
+  // Search Twitter
+  try {
+    const tw = await mcp.callTool("getTwitterPostsByKeywords", {
+      query: keywords,
+      startDate, endDate,
+      fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
+      userPrompt: `Find social media mentions of "${keywords}" for reputation analysis`
     });
-
-    if (!r.ok) {
-      const errText = await r.text();
-      throw new Error(`Claude API legacy ${r.status}: ${errText.substring(0, 500)}`);
-    }
-    const data = await r.json();
-
-    for (const block of data.content) {
-      if (block.type === "text") finalText += block.text;
-    }
-
-    if (data.stop_reason === "end_turn") break;
-
-    if (data.stop_reason === "tool_use") {
-      messages.push({ role: "assistant", content: data.content });
-      const results = [];
-      for (const block of data.content) {
-        if (block.type === "tool_use") {
-          results.push({ type: "tool_result", tool_use_id: block.id, content: "Executed." });
+    if (tw && tw.results) {
+      data.twitter_posts = tw.results.map(p => ({
+        id: p.id, text: (p.text || "").substring(0, 300), author: p.authorUsername,
+        date: p.createdAtDate, likes: p.likeCount || 0, retweets: p.retweetCount || 0,
+        replies: p.replyCount || 0, impressions: p.impressionCount || 0,
+        url: `https://x.com/${p.authorUsername}/status/${p.id}`
+      }));
+    } else if (tw && tw.operationId) {
+      // Async mode — poll for results
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const status = await mcp.callTool("checkOperationStatus", { operationId: tw.operationId });
+        if (status && status.results) {
+          data.twitter_posts = status.results.map(p => ({
+            id: p.id, text: (p.text || "").substring(0, 300), author: p.authorUsername,
+            date: p.createdAtDate, likes: p.likeCount || 0, retweets: p.retweetCount || 0,
+            replies: p.replyCount || 0, impressions: p.impressionCount || 0,
+            url: `https://x.com/${p.authorUsername}/status/${p.id}`
+          }));
+          break;
         }
+        if (status && (status.status === "completed" || status.status === "failed")) break;
       }
-      if (results.length > 0) {
-        messages.push({ role: "user", content: results });
-      } else {
-        messages.push({ role: "user", content: [{ type: "text", text: "Continue." }] });
-      }
-      continue;
     }
+  } catch (e) { data.twitter_posts = [{ error: e.message }]; }
 
-    break;
-  }
+  // Search Reddit
+  try {
+    const rd = await mcp.callTool("getRedditPostsByKeywords", {
+      query: keywords,
+      startDate, endDate,
+      fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
+      userPrompt: `Find Reddit discussions about "${keywords}" for reputation analysis`
+    });
+    if (rd && rd.results) {
+      data.reddit_posts = rd.results.map(p => ({
+        id: p.id, title: p.title, text: (p.selftext || "").substring(0, 300),
+        author: p.authorUsername, subreddit: p.subredditName, score: p.score || 0,
+        comments: p.commentsCount || 0, date: p.createdAtDate,
+        url: p.permalink ? `https://reddit.com${p.permalink}` : null
+      }));
+    } else if (rd && rd.operationId) {
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const status = await mcp.callTool("checkOperationStatus", { operationId: rd.operationId });
+        if (status && status.results) {
+          data.reddit_posts = status.results.map(p => ({
+            id: p.id, title: p.title, text: (p.selftext || "").substring(0, 300),
+            author: p.authorUsername, subreddit: p.subredditName, score: p.score || 0,
+            comments: p.commentsCount || 0, date: p.createdAtDate,
+            url: p.permalink ? `https://reddit.com${p.permalink}` : null
+          }));
+          break;
+        }
+        if (status && (status.status === "completed" || status.status === "failed")) break;
+      }
+    }
+  } catch (e) { data.reddit_posts = [{ error: e.message }]; }
 
-  if (!finalText) throw new Error("Empty response from Claude (legacy) with Xpoz");
-  return finalText;
+  // Search Instagram
+  try {
+    const ig = await mcp.callTool("getInstagramPostsByKeywords", {
+      query: keywords,
+      startDate, endDate,
+      fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
+      userPrompt: `Find Instagram posts about "${keywords}" for reputation analysis`
+    });
+    if (ig && ig.results) {
+      data.instagram_posts = ig.results.map(p => ({
+        id: p.id, caption: (p.caption || "").substring(0, 300), author: p.username,
+        date: p.createdAtDate, likes: p.likeCount || 0, comments: p.commentCount || 0,
+        url: p.codeUrl ? `https://instagram.com/p/${p.codeUrl}` : null
+      }));
+    }
+  } catch (e) { data.instagram_posts = [{ error: e.message }]; }
+
+  const tCount = data.twitter_posts.filter(p => !p.error).length;
+  const rCount = data.reddit_posts.filter(p => !p.error).length;
+  const iCount = data.instagram_posts.filter(p => !p.error).length;
+  data.summary = `Found ${tCount} Twitter posts, ${rCount} Reddit posts, ${iCount} Instagram posts for "${keywords}" (${startDate} to ${endDate}).`;
+  return data;
 }
 
 // Fallback social data (no Xpoz token) — Reddit public API only
@@ -593,17 +584,9 @@ Output ONLY the completed HTML.`;
 function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-DATA COLLECTION: You have access to Xpoz social media search tools. You MUST use them to collect data before writing the report:
+DATA PROVIDED: You receive real social media data collected via the Xpoz platform — including Twitter/X posts with engagement metrics, Reddit posts and comments, and possibly Instagram posts. Analyze ALL provided data thoroughly.
 
-1. Use getTwitterPostsByKeywords to search Twitter/X for the client name and key terms. Request fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "quoteCount", "impressionCount"]. Use responseType "fast" for up to 300 results.
-2. Use getRedditPostsByKeywords to search Reddit. Request fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"].
-3. Use getInstagramPostsByKeywords to search Instagram. Request fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"].
-
-For each platform, search for the client's full name and any key variations (e.g. last name only, company associations). Search across the full timeframe specified in the metadata. If a search returns many results, analyze ALL of them — do not ignore data.
-
-Also use web_search to find supplementary news articles and context about the client.
-
-CRITICAL — POST LINKS: Every time you mention a specific post, tweet, or Reddit thread in the report, you MUST link directly to it. For Twitter: https://x.com/{authorUsername}/status/{id}. For Reddit: https://reddit.com{permalink}. For Instagram: https://instagram.com/p/{codeUrl}. Wrap titles/excerpts in <a href="URL" target="_blank"> tags. The "Most Engaged Posts" table and any inline references MUST be clickable links.
+CRITICAL — POST LINKS: Every time you mention a specific post, tweet, or Reddit thread in the report, you MUST link directly to it. Use the "url" field from the data. For Twitter: https://x.com/{author}/status/{id}. For Reddit: use the url field. For Instagram: use the url field. Wrap titles/excerpts in <a href="URL" target="_blank"> tags. The "Most Engaged Posts" table and any inline references MUST be clickable links.
 
 TIMEFRAME: The data covers a specific date range provided in the metadata. Reference this timeframe in the report header and executive summary (e.g., "Analysis Period: Feb 1 - Mar 1, 2026").
 
