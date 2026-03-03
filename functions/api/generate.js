@@ -260,12 +260,20 @@ async function callClaudeWithXpoz(apiKey, system, userContent, xpozToken) {
   for (let turn = 0; turn < 25; turn++) {
     const reqBody = {
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 64000,
+      max_tokens: 16000,
       system,
       messages,
       tools: [
         { type: "web_search_20250305", name: "web_search" },
-        { type: "mcp_toolset", mcp_server_name: "xpoz" }
+        {
+          type: "mcp_toolset",
+          mcp_server_name: "xpoz",
+          allowed_tools: [
+            "getTwitterPostsByKeywords",
+            "getRedditPostsByKeywords",
+            "getInstagramPostsByKeywords"
+          ]
+        }
       ],
       mcp_servers: [
         {
@@ -287,53 +295,125 @@ async function callClaudeWithXpoz(apiKey, system, userContent, xpozToken) {
       },
       body: JSON.stringify(reqBody)
     });
+
     if (!r.ok) {
-      const e = await r.text();
-      throw new Error(`Claude API ${r.status}: ${e.substring(0, 500)}`);
+      const errText = await r.text();
+      // If new beta header fails, try old format
+      if (r.status === 400 && turn === 0) {
+        return await callClaudeWithXpozLegacy(apiKey, system, userContent, xpozToken);
+      }
+      throw new Error(`Claude API ${r.status}: ${errText.substring(0, 500)}`);
     }
     const data = await r.json();
 
     // Collect text from this turn
-    let turnText = "";
     for (const block of data.content) {
-      if (block.type === "text") turnText += block.text;
+      if (block.type === "text") finalText += block.text;
     }
-    finalText += turnText;
 
     // If Claude is done, break
     if (data.stop_reason === "end_turn") break;
 
-    // If Claude wants to use tools, continue the agentic loop
-    // MCP tools show as mcp_tool_use, web_search shows as server_tool_use
-    // Both are handled server-side by Anthropic — results come back automatically
-    // We just need to check if there are any tool_use blocks that need client-side results
-    const clientToolUses = data.content.filter(b => b.type === "tool_use");
-    const mcpToolUses = data.content.filter(b => b.type === "mcp_tool_use");
-    const serverToolUses = data.content.filter(b => b.type === "server_tool_use");
-
-    // If only server-side tools (web_search, mcp), results are inline - just continue
-    if (clientToolUses.length === 0 && (mcpToolUses.length > 0 || serverToolUses.length > 0)) {
-      // Server-side tools: push assistant turn, then continue — results should be in content
+    // For tool_use stop reason, continue the agentic loop
+    if (data.stop_reason === "tool_use") {
       messages.push({ role: "assistant", content: data.content });
-      // Add empty user message to continue
-      messages.push({ role: "user", content: [{ type: "text", text: "Continue generating the report." }] });
+
+      // Build tool results for any blocks that need them
+      const results = [];
+      for (const block of data.content) {
+        if (block.type === "tool_use") {
+          results.push({ type: "tool_result", tool_use_id: block.id, content: "Executed." });
+        }
+      }
+      if (results.length > 0) {
+        messages.push({ role: "user", content: results });
+      } else {
+        messages.push({ role: "user", content: [{ type: "text", text: "Continue." }] });
+      }
       continue;
     }
 
-    // No tools at all — we're done
-    if (clientToolUses.length === 0 && mcpToolUses.length === 0 && serverToolUses.length === 0) break;
-
-    // Client-side tool_use (shouldn't happen since we only use server-side tools, but handle gracefully)
-    messages.push({ role: "assistant", content: data.content });
-    const toolResults = clientToolUses.map(t => ({
-      type: "tool_result",
-      tool_use_id: t.id,
-      content: "Tool executed successfully."
-    }));
-    messages.push({ role: "user", content: toolResults });
+    // Any other stop reason — done
+    break;
   }
 
   if (!finalText) throw new Error("Empty response from Claude with Xpoz");
+  return finalText;
+}
+
+// Legacy format fallback using mcp-client-2025-04-04 beta header
+async function callClaudeWithXpozLegacy(apiKey, system, userContent, xpozToken) {
+  const messages = [{ role: "user", content: userContent }];
+  let finalText = "";
+
+  for (let turn = 0; turn < 25; turn++) {
+    const reqBody = {
+      model: "claude-sonnet-4-5-20250929",
+      max_tokens: 16000,
+      system,
+      messages,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      mcp_servers: [
+        {
+          type: "url",
+          url: "https://mcp.xpoz.ai/mcp",
+          name: "xpoz",
+          authorization_token: xpozToken,
+          tool_configuration: {
+            enabled: true,
+            allowed_tools: [
+              "getTwitterPostsByKeywords",
+              "getRedditPostsByKeywords",
+              "getInstagramPostsByKeywords"
+            ]
+          }
+        }
+      ]
+    };
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "mcp-client-2025-04-04"
+      },
+      body: JSON.stringify(reqBody)
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(`Claude API legacy ${r.status}: ${errText.substring(0, 500)}`);
+    }
+    const data = await r.json();
+
+    for (const block of data.content) {
+      if (block.type === "text") finalText += block.text;
+    }
+
+    if (data.stop_reason === "end_turn") break;
+
+    if (data.stop_reason === "tool_use") {
+      messages.push({ role: "assistant", content: data.content });
+      const results = [];
+      for (const block of data.content) {
+        if (block.type === "tool_use") {
+          results.push({ type: "tool_result", tool_use_id: block.id, content: "Executed." });
+        }
+      }
+      if (results.length > 0) {
+        messages.push({ role: "user", content: results });
+      } else {
+        messages.push({ role: "user", content: [{ type: "text", text: "Continue." }] });
+      }
+      continue;
+    }
+
+    break;
+  }
+
+  if (!finalText) throw new Error("Empty response from Claude (legacy) with Xpoz");
   return finalText;
 }
 
