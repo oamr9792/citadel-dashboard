@@ -38,7 +38,15 @@ export async function onRequestPost(context) {
         // Collect data directly from Xpoz MCP (fast, ~15s)
         try {
           const sd = await fetchXpozDirect(kw, clientName, xpozKey, tfDays);
-          dataPayload += `\n=== SOCIAL MEDIA DATA (from Xpoz) ===\n${sd}\n`;
+          const tCount = sd.twitter.filter(p => !p._error).length;
+          const rCount = sd.reddit.filter(p => !p._error).length;
+          const iCount = sd.instagram.filter(p => !p._error).length;
+          dataPayload += `\n=== SOCIAL MEDIA DATA (from Xpoz) ===`;
+          dataPayload += `\nQuery: "${sd.meta.query}" | Period: ${sd.meta.startDate} to ${sd.meta.endDate}`;
+          dataPayload += `\nTotal posts found: Twitter=${tCount}, Reddit=${rCount}, Instagram=${iCount}`;
+          dataPayload += `\n\n--- ALL TWITTER POSTS (${tCount} total — analyze every single one) ---\n${JSON.stringify(sd.twitter, null, 1)}`;
+          dataPayload += `\n\n--- ALL REDDIT POSTS (${rCount} total — analyze every single one) ---\n${JSON.stringify(sd.reddit, null, 1)}`;
+          dataPayload += `\n\n--- ALL INSTAGRAM POSTS (${iCount} total — analyze every single one) ---\n${JSON.stringify(sd.instagram, null, 1)}\n`;
         } catch (e) {
           dataPayload += `\n=== SOCIAL MEDIA DATA ===\nXpoz collection error: ${e.message}\n`;
           const sd = await fetchSocialDataFallback(kw, clientName);
@@ -295,18 +303,16 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
 
   const endDate = new Date().toISOString().split("T")[0];
   const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
-  const sections = [];
 
-  // Convert multi-word keywords to AND query for exact matching
-  // "Murry Gunty" -> "Murry AND Gunty"
-  // "Murry Gunty, Gunty Capital" -> search each separately
+  // Convert multi-word keywords to AND query
   const queryTerms = keywords.split(",").map(k => k.trim()).filter(Boolean);
   const xpozQueries = queryTerms.map(term => {
     const words = term.split(/\s+/).filter(Boolean);
     return words.length > 1 ? words.join(" AND ") : term;
   });
-  // Use first query (primary name) for main search
   const mainQuery = xpozQueries[0] || keywords;
+
+  const data = { twitter: [], reddit: [], instagram: [], meta: { query: mainQuery, startDate, endDate, timeframeDays } };
 
   // Twitter
   try {
@@ -315,8 +321,9 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
       fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
       userPrompt: `Find tweets about "${keywords}" for reputation monitoring`
     }});
-    sections.push(`=== TWITTER/X DATA ===\n${extractMcpText(tw)}`);
-  } catch (e) { sections.push(`=== TWITTER/X ===\nError: ${e.message}`); }
+    const twText = extractMcpText(tw);
+    data.twitter = parseXpozCompact(twText).results;
+  } catch (e) { data.twitter = [{ _error: e.message }]; }
 
   // Reddit
   try {
@@ -325,8 +332,9 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
       fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
       userPrompt: `Find Reddit posts about "${keywords}" for reputation monitoring`
     }});
-    sections.push(`=== REDDIT DATA ===\n${extractMcpText(rd)}`);
-  } catch (e) { sections.push(`=== REDDIT ===\nError: ${e.message}`); }
+    const rdText = extractMcpText(rd);
+    data.reddit = parseXpozCompact(rdText).results;
+  } catch (e) { data.reddit = [{ _error: e.message }]; }
 
   // Instagram
   try {
@@ -335,10 +343,50 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
       fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
       userPrompt: `Find Instagram posts about "${keywords}" for reputation monitoring`
     }});
-    sections.push(`=== INSTAGRAM DATA ===\n${extractMcpText(ig)}`);
-  } catch (e) { sections.push(`=== INSTAGRAM ===\nError: ${e.message}`); }
+    const igText = extractMcpText(ig);
+    data.instagram = parseXpozCompact(igText).results;
+  } catch (e) { data.instagram = [{ _error: e.message }]; }
 
-  return sections.join("\n\n");
+  // Add URLs to each post
+  for (const p of data.twitter) { if (p.id && p.authorUsername) p.url = `https://x.com/${p.authorUsername}/status/${p.id}`; }
+  for (const p of data.reddit) { if (p.permalink) p.url = `https://reddit.com${p.permalink}`; }
+  for (const p of data.instagram) { if (p.codeUrl) p.url = `https://instagram.com/p/${p.codeUrl}`; }
+
+  return data;
+}
+
+// Parse Xpoz compact text format into structured array
+function parseXpozCompact(text) {
+  if (!text || typeof text !== "string") return { results: [], count: 0 };
+  const lines = text.split("\n");
+  let fields = [];
+  let count = 0;
+  const results = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === "success: true" || trimmed === "success: false" || trimmed === "data:") continue;
+    const hdr = trimmed.match(/^results\[(\d+)\]\{([^}]+)\}:$/);
+    if (hdr) { count = parseInt(hdr[1]); fields = hdr[2].split(","); continue; }
+    if (fields.length > 0 && !trimmed.startsWith("results[") && !trimmed.startsWith("guidance:") && !trimmed.startsWith("note:") && !trimmed.startsWith("To get")) {
+      const row = {};
+      let rem = trimmed;
+      for (let i = 0; i < fields.length; i++) {
+        rem = rem.trimStart();
+        if (rem.startsWith('"')) {
+          let end = 1;
+          while (end < rem.length) { if (rem[end] === '\\' && end + 1 < rem.length) { end += 2; continue; } if (rem[end] === '"') break; end++; }
+          row[fields[i]] = rem.substring(1, end).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+          rem = rem.substring(end + 1).replace(/^,/, "");
+        } else {
+          const ci = rem.indexOf(",");
+          if (ci === -1) { row[fields[i]] = rem; rem = ""; }
+          else { row[fields[i]] = rem.substring(0, ci); rem = rem.substring(ci + 1); }
+        }
+      }
+      if (Object.keys(row).length > 0) results.push(row);
+    }
+  }
+  return { count, results, parsed: results.length };
 }
 
 // Fallback social data (no Xpoz token) — Reddit public API only
@@ -517,11 +565,15 @@ Output ONLY the completed HTML.`;
 function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-DATA PROVIDED: You receive real social media data collected via the Xpoz platform — including Twitter/X posts with engagement metrics, Reddit posts and comments, and possibly Instagram posts. Analyze ALL provided data thoroughly.
+DATA PROVIDED: You receive structured JSON arrays of social media posts collected via the Xpoz platform. The data includes Twitter/X posts, Reddit posts, and Instagram posts. Each post has engagement metrics, author info, dates, and direct URLs.
 
-CRITICAL — STRICT RELEVANCE FILTERING: The social media data may contain false positives — posts that match individual words but are NOT actually about the client. You MUST filter these out. Only include posts that genuinely refer to the specific person or entity being analyzed. For example, if the client is "Murry Gunty", discard posts about "Bill Murray", "Murry Christmas", or unrelated people named "Murry". A post is relevant ONLY if it references the client's full name, or clearly refers to the same specific person/entity through context (e.g., their company, known associates, or specific events tied to them). When in doubt, exclude the post. Report the FILTERED count (only relevant posts), not the raw search count.
+CRITICAL — COMPREHENSIVE ANALYSIS: You are given the COMPLETE dataset. You must analyze EVERY SINGLE POST provided — do not skip, summarize away, or selectively present posts. The report must account for all posts in the data. Your metrics (post counts, sentiment percentages, engagement totals) must reflect the ENTIRE dataset. If there are 15 relevant Twitter posts, the report must reference all 15 — not a "representative sample."
 
-CRITICAL — POST LINKS: Every time you mention a specific post, tweet, or Reddit thread in the report, you MUST link directly to it. Use the "url" field from the data. For Twitter: https://x.com/{author}/status/{id}. For Reddit: use the url field. For Instagram: use the url field. Wrap titles/excerpts in <a href="URL" target="_blank"> tags. The "Most Engaged Posts" table and any inline references MUST be clickable links.
+CRITICAL — STRICT RELEVANCE FILTERING: The data may contain false positives — posts matching individual words but NOT about the client. Discard any post that does NOT genuinely reference the specific person/entity. For "Murry Gunty", exclude posts about "Bill Murray", "Murry Christmas", etc. Report FILTERED counts only. Clearly state: "X posts found, Y confirmed relevant after filtering."
+
+CRITICAL — DETERMINISTIC RESULTS: Your analysis must be consistent. Given the same data, produce the same conclusions. Base all metrics strictly on the data provided — do not estimate or approximate. Count exact numbers.
+
+CRITICAL — POST LINKS: Every post referenced must link to its URL. For Twitter: use the url field. For Reddit: use the url field. For Instagram: use the url field. The "Most Engaged Posts" table MUST include clickable links for EVERY row.`;
 
 TIMEFRAME: The data covers a specific date range provided in the metadata. Reference this timeframe in the report header and executive summary (e.g., "Analysis Period: Feb 1 - Mar 1, 2026").
 
