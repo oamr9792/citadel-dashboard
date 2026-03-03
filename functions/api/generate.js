@@ -40,7 +40,7 @@ export async function onRequestPost(context) {
           const sd = await fetchXpozDirect(kw, clientName, xpozKey, tfDays);
           const analysis = precomputeSocialAnalysis(sd, clientName, kw);
           dataPayload += `\n=== SOCIAL MEDIA DATA (PRE-ANALYZED — USE THESE EXACT NUMBERS) ===`;
-          dataPayload += `\nQuery: "${sd.meta.query}" | Period: ${sd.meta.startDate} to ${sd.meta.endDate}`;
+          dataPayload += `\nQueries searched: ${JSON.stringify(sd.meta.queries)} | Period: ${sd.meta.startDate} to ${sd.meta.endDate}`;
           dataPayload += `\n\n--- COUNTS (use these exact numbers in the report) ---`;
           dataPayload += `\nRaw posts found: Twitter=${analysis.counts.rawTwitter}, Reddit=${analysis.counts.rawReddit}, Instagram=${analysis.counts.rawInstagram}, Total=${analysis.counts.rawTotal}`;
           dataPayload += `\nAfter relevance filtering: Twitter=${analysis.counts.twitter}, Reddit=${analysis.counts.reddit}, Instagram=${analysis.counts.instagram}, Total=${analysis.counts.filteredTotal}`;
@@ -306,48 +306,58 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
   const endDate = new Date().toISOString().split("T")[0];
   const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
 
-  // Convert multi-word keywords to AND query
+  // Build search queries from ALL comma-separated keywords
+  // "Murry Gunty, Black Bear Sports Group, BBSG" → 3 separate queries
   const queryTerms = keywords.split(",").map(k => k.trim()).filter(Boolean);
   const xpozQueries = queryTerms.map(term => {
     const words = term.split(/\s+/).filter(Boolean);
     return words.length > 1 ? words.join(" AND ") : term;
   });
-  const mainQuery = xpozQueries[0] || keywords;
 
-  const data = { twitter: [], reddit: [], instagram: [], meta: { query: mainQuery, startDate, endDate, timeframeDays } };
+  const data = { twitter: [], reddit: [], instagram: [], meta: { queries: xpozQueries, startDate, endDate, timeframeDays } };
+  const seenTw = new Set(), seenRd = new Set(), seenIg = new Set();
 
-  // Twitter
-  try {
-    const tw = await xpozRpc(xpozToken, "tools/call", { name: "getTwitterPostsByKeywords", arguments: {
-      query: mainQuery, startDate, endDate,
-      fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
-      userPrompt: `Find tweets about "${keywords}" for reputation monitoring`
-    }});
-    const twText = extractMcpText(tw);
-    data.twitter = parseXpozCompact(twText).results;
-  } catch (e) { data.twitter = [{ _error: e.message }]; }
+  // Search each query term across all platforms, deduplicate by ID
+  // Cap at 5 keyword phrases to stay within Cloudflare timeout
+  const queries = xpozQueries.slice(0, 5);
 
-  // Reddit
-  try {
-    const rd = await xpozRpc(xpozToken, "tools/call", { name: "getRedditPostsByKeywords", arguments: {
-      query: mainQuery, startDate, endDate,
-      fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
-      userPrompt: `Find Reddit posts about "${keywords}" for reputation monitoring`
-    }});
-    const rdText = extractMcpText(rd);
-    data.reddit = parseXpozCompact(rdText).results;
-  } catch (e) { data.reddit = [{ _error: e.message }]; }
+  for (const q of queries) {
+    // Twitter
+    try {
+      const tw = await xpozRpc(xpozToken, "tools/call", { name: "getTwitterPostsByKeywords", arguments: {
+        query: q, startDate, endDate,
+        fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
+        userPrompt: `Find tweets about "${q}" for reputation monitoring of ${clientName}`
+      }});
+      for (const p of parseXpozCompact(extractMcpText(tw)).results) {
+        if (p.id && !seenTw.has(p.id)) { seenTw.add(p.id); data.twitter.push(p); }
+      }
+    } catch (e) { /* skip failed query */ }
 
-  // Instagram
-  try {
-    const ig = await xpozRpc(xpozToken, "tools/call", { name: "getInstagramPostsByKeywords", arguments: {
-      query: mainQuery, startDate, endDate,
-      fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
-      userPrompt: `Find Instagram posts about "${keywords}" for reputation monitoring`
-    }});
-    const igText = extractMcpText(ig);
-    data.instagram = parseXpozCompact(igText).results;
-  } catch (e) { data.instagram = [{ _error: e.message }]; }
+    // Reddit
+    try {
+      const rd = await xpozRpc(xpozToken, "tools/call", { name: "getRedditPostsByKeywords", arguments: {
+        query: q, startDate, endDate,
+        fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
+        userPrompt: `Find Reddit posts about "${q}" for reputation monitoring of ${clientName}`
+      }});
+      for (const p of parseXpozCompact(extractMcpText(rd)).results) {
+        if (p.id && !seenRd.has(p.id)) { seenRd.add(p.id); data.reddit.push(p); }
+      }
+    } catch (e) { /* skip failed query */ }
+
+    // Instagram
+    try {
+      const ig = await xpozRpc(xpozToken, "tools/call", { name: "getInstagramPostsByKeywords", arguments: {
+        query: q, startDate, endDate,
+        fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
+        userPrompt: `Find Instagram posts about "${q}" for reputation monitoring of ${clientName}`
+      }});
+      for (const p of parseXpozCompact(extractMcpText(ig)).results) {
+        if (p.id && !seenIg.has(p.id)) { seenIg.add(p.id); data.instagram.push(p); }
+      }
+    } catch (e) { /* skip failed query */ }
+  }
 
   // Add URLs to each post
   for (const p of data.twitter) { if (p.id && p.authorUsername) p.url = `https://x.com/${p.authorUsername}/status/${p.id}`; }
@@ -394,6 +404,8 @@ function parseXpozCompact(text) {
 // Pre-compute social analysis deterministically (no LLM variance)
 function precomputeSocialAnalysis(data, clientName, keywords) {
   const kwPhrases = keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
+  // A post is relevant if it matches ANY keyword phrase
+  // Each phrase: all words in the phrase must appear in the text
   function isRelevant(text) {
     if (!text) return false;
     const lower = text.toLowerCase();
