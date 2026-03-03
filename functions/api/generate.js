@@ -38,10 +38,9 @@ export async function onRequestPost(context) {
         // Collect data directly from Xpoz MCP (fast, ~15s)
         try {
           const sd = await fetchXpozDirect(kw, clientName, xpozKey, tfDays);
-          dataPayload += `\n=== SOCIAL MEDIA DATA (from Xpoz) ===\n${JSON.stringify(sd, null, 2)}\n`;
+          dataPayload += `\n=== SOCIAL MEDIA DATA (from Xpoz) ===\n${sd}\n`;
         } catch (e) {
           dataPayload += `\n=== SOCIAL MEDIA DATA ===\nXpoz collection error: ${e.message}\n`;
-          // Fallback to Reddit public API
           const sd = await fetchSocialDataFallback(kw, clientName);
           dataPayload += JSON.stringify(sd, null, 2) + "\n";
         }
@@ -254,158 +253,81 @@ async function callClaudeWithWebSearch(apiKey, system, userContent) {
   return finalText;
 }
 
-// ── Direct Xpoz MCP client — fast data collection (~15s) ──
-class XpozMCP {
-  constructor(token) { this.token = token; this.sid = null; this.idCounter = 0; }
-
-  async rpc(method, params = {}) {
-    const hdrs = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": `Bearer ${this.token}` };
-    if (this.sid) hdrs["Mcp-Session-Id"] = this.sid;
-    const r = await fetch("https://mcp.xpoz.ai/mcp", {
-      method: "POST", headers: hdrs,
-      body: JSON.stringify({ jsonrpc: "2.0", id: String(++this.idCounter), method, params })
-    });
-    const newSid = r.headers.get("Mcp-Session-Id");
-    if (newSid) this.sid = newSid;
-    const ct = r.headers.get("Content-Type") || "";
-    if (ct.includes("text/event-stream")) {
-      const text = await r.text();
-      for (const line of text.split("\n")) {
-        if (line.startsWith("data: ")) {
-          try { const p = JSON.parse(line.slice(6)); if (p.result) return p.result; if (p.error) throw new Error(JSON.stringify(p.error)); } catch (e) { if (e.message.includes("error")) throw e; }
-        }
-      }
-      return null;
-    }
-    if (!r.ok) { const e = await r.text(); throw new Error(`Xpoz ${r.status}: ${e.substring(0, 300)}`); }
-    const data = await r.json();
-    if (data.error) throw new Error(`Xpoz: ${JSON.stringify(data.error)}`);
-    return data.result || data;
-  }
-
-  async init() {
-    const result = await this.rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "citadel", version: "1.0" } });
-    // Send initialized notification
-    await fetch("https://mcp.xpoz.ai/mcp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.token}`, ...(this.sid ? { "Mcp-Session-Id": this.sid } : {}) },
-      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
-    });
-    return result;
-  }
-
-  async callTool(name, args) {
-    const result = await this.rpc("tools/call", { name, arguments: args });
-    if (!result) return null;
-    // Extract text content from MCP tool result
-    if (result.content && Array.isArray(result.content)) {
-      for (const block of result.content) {
-        if (block.type === "text" && block.text) {
-          try { return JSON.parse(block.text); } catch { return block.text; }
-        }
+// ── Direct Xpoz MCP — fast data collection ──
+async function xpozRpc(token, method, params = {}) {
+  const hdrs = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": `Bearer ${token}` };
+  const r = await fetch("https://mcp.xpoz.ai/mcp", {
+    method: "POST", headers: hdrs,
+    body: JSON.stringify({ jsonrpc: "2.0", id: String(Date.now()), method, params })
+  });
+  const text = await r.text();
+  const ct = r.headers.get("Content-Type") || "";
+  if (ct.includes("text/event-stream")) {
+    for (const line of text.split("\n")) {
+      if (line.startsWith("data: ")) {
+        try {
+          const p = JSON.parse(line.slice(6));
+          if (p.result) return p.result;
+          if (p.error) return { error: JSON.stringify(p.error) };
+        } catch {}
       }
     }
-    return result;
   }
+  if (!r.ok) return { error: `HTTP ${r.status}: ${text.substring(0, 200)}` };
+  try { const j = JSON.parse(text); return j.result || j; } catch { return { raw: text }; }
+}
+
+function extractMcpText(result) {
+  if (!result) return "";
+  if (result.error) return `Error: ${result.error}`;
+  if (result.content && Array.isArray(result.content)) {
+    return result.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+  }
+  return JSON.stringify(result);
 }
 
 async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 30) {
-  const mcp = new XpozMCP(xpozToken);
-  await mcp.init();
+  await xpozRpc(xpozToken, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "citadel", version: "1.0" } });
+  fetch("https://mcp.xpoz.ai/mcp", { method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${xpozToken}` },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+  }).catch(() => {});
 
   const endDate = new Date().toISOString().split("T")[0];
   const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
-  const data = { twitter_posts: [], reddit_posts: [], instagram_posts: [], summary: "" };
+  const sections = [];
 
-  // Search Twitter
+  // Twitter
   try {
-    const tw = await mcp.callTool("getTwitterPostsByKeywords", {
-      query: keywords,
-      startDate, endDate,
+    const tw = await xpozRpc(xpozToken, "tools/call", { name: "getTwitterPostsByKeywords", arguments: {
+      query: keywords, startDate, endDate,
       fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
-      userPrompt: `Find social media mentions of "${keywords}" for reputation analysis`
-    });
-    if (tw && tw.results) {
-      data.twitter_posts = tw.results.map(p => ({
-        id: p.id, text: (p.text || "").substring(0, 300), author: p.authorUsername,
-        date: p.createdAtDate, likes: p.likeCount || 0, retweets: p.retweetCount || 0,
-        replies: p.replyCount || 0, impressions: p.impressionCount || 0,
-        url: `https://x.com/${p.authorUsername}/status/${p.id}`
-      }));
-    } else if (tw && tw.operationId) {
-      // Async mode — poll for results
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 5000));
-        const status = await mcp.callTool("checkOperationStatus", { operationId: tw.operationId });
-        if (status && status.results) {
-          data.twitter_posts = status.results.map(p => ({
-            id: p.id, text: (p.text || "").substring(0, 300), author: p.authorUsername,
-            date: p.createdAtDate, likes: p.likeCount || 0, retweets: p.retweetCount || 0,
-            replies: p.replyCount || 0, impressions: p.impressionCount || 0,
-            url: `https://x.com/${p.authorUsername}/status/${p.id}`
-          }));
-          break;
-        }
-        if (status && (status.status === "completed" || status.status === "failed")) break;
-      }
-    }
-  } catch (e) { data.twitter_posts = [{ error: e.message }]; }
+      userPrompt: `Find tweets about "${keywords}" for reputation monitoring`
+    }});
+    sections.push(`=== TWITTER/X DATA ===\n${extractMcpText(tw)}`);
+  } catch (e) { sections.push(`=== TWITTER/X ===\nError: ${e.message}`); }
 
-  // Search Reddit
+  // Reddit
   try {
-    const rd = await mcp.callTool("getRedditPostsByKeywords", {
-      query: keywords,
-      startDate, endDate,
+    const rd = await xpozRpc(xpozToken, "tools/call", { name: "getRedditPostsByKeywords", arguments: {
+      query: keywords, startDate, endDate,
       fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
-      userPrompt: `Find Reddit discussions about "${keywords}" for reputation analysis`
-    });
-    if (rd && rd.results) {
-      data.reddit_posts = rd.results.map(p => ({
-        id: p.id, title: p.title, text: (p.selftext || "").substring(0, 300),
-        author: p.authorUsername, subreddit: p.subredditName, score: p.score || 0,
-        comments: p.commentsCount || 0, date: p.createdAtDate,
-        url: p.permalink ? `https://reddit.com${p.permalink}` : null
-      }));
-    } else if (rd && rd.operationId) {
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 5000));
-        const status = await mcp.callTool("checkOperationStatus", { operationId: rd.operationId });
-        if (status && status.results) {
-          data.reddit_posts = status.results.map(p => ({
-            id: p.id, title: p.title, text: (p.selftext || "").substring(0, 300),
-            author: p.authorUsername, subreddit: p.subredditName, score: p.score || 0,
-            comments: p.commentsCount || 0, date: p.createdAtDate,
-            url: p.permalink ? `https://reddit.com${p.permalink}` : null
-          }));
-          break;
-        }
-        if (status && (status.status === "completed" || status.status === "failed")) break;
-      }
-    }
-  } catch (e) { data.reddit_posts = [{ error: e.message }]; }
+      userPrompt: `Find Reddit posts about "${keywords}" for reputation monitoring`
+    }});
+    sections.push(`=== REDDIT DATA ===\n${extractMcpText(rd)}`);
+  } catch (e) { sections.push(`=== REDDIT ===\nError: ${e.message}`); }
 
-  // Search Instagram
+  // Instagram
   try {
-    const ig = await mcp.callTool("getInstagramPostsByKeywords", {
-      query: keywords,
-      startDate, endDate,
+    const ig = await xpozRpc(xpozToken, "tools/call", { name: "getInstagramPostsByKeywords", arguments: {
+      query: keywords, startDate, endDate,
       fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
-      userPrompt: `Find Instagram posts about "${keywords}" for reputation analysis`
-    });
-    if (ig && ig.results) {
-      data.instagram_posts = ig.results.map(p => ({
-        id: p.id, caption: (p.caption || "").substring(0, 300), author: p.username,
-        date: p.createdAtDate, likes: p.likeCount || 0, comments: p.commentCount || 0,
-        url: p.codeUrl ? `https://instagram.com/p/${p.codeUrl}` : null
-      }));
-    }
-  } catch (e) { data.instagram_posts = [{ error: e.message }]; }
+      userPrompt: `Find Instagram posts about "${keywords}" for reputation monitoring`
+    }});
+    sections.push(`=== INSTAGRAM DATA ===\n${extractMcpText(ig)}`);
+  } catch (e) { sections.push(`=== INSTAGRAM ===\nError: ${e.message}`); }
 
-  const tCount = data.twitter_posts.filter(p => !p.error).length;
-  const rCount = data.reddit_posts.filter(p => !p.error).length;
-  const iCount = data.instagram_posts.filter(p => !p.error).length;
-  data.summary = `Found ${tCount} Twitter posts, ${rCount} Reddit posts, ${iCount} Instagram posts for "${keywords}" (${startDate} to ${endDate}).`;
-  return data;
+  return sections.join("\n\n");
 }
 
 // Fallback social data (no Xpoz token) — Reddit public API only
