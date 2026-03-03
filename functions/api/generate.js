@@ -573,7 +573,7 @@ CRITICAL — STRICT RELEVANCE FILTERING: The data may contain false positives �
 
 CRITICAL — DETERMINISTIC RESULTS: Your analysis must be consistent. Given the same data, produce the same conclusions. Base all metrics strictly on the data provided — do not estimate or approximate. Count exact numbers.
 
-CRITICAL — POST LINKS: Every post referenced must link to its URL. For Twitter: use the url field. For Reddit: use the url field. For Instagram: use the url field. The "Most Engaged Posts" table MUST include clickable links for EVERY row.`;
+CRITICAL — POST LINKS: Every post referenced must link to its URL. For Twitter: use the url field. For Reddit: use the url field. For Instagram: use the url field. The "Most Engaged Posts" table MUST include clickable links for EVERY row.
 
 TIMEFRAME: The data covers a specific date range provided in the metadata. Reference this timeframe in the report header and executive summary (e.g., "Analysis Period: Feb 1 - Mar 1, 2026").
 
