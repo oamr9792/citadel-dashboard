@@ -26,26 +26,38 @@ export async function onRequestPost(context) {
       dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(ld, null, 2)}\n`;
     }
     if (type === "social" || type === "executive") {
-      if (body.socialData && (body.socialData.twitter || body.socialData.reddit)) {
-        // Pre-collected Xpoz data from frontend
-        dataPayload += `\n=== XPOZ SOCIAL MEDIA DATA ===\n`;
-        dataPayload += `Timeframe: ${body.socialData.metadata?.startDate || 'N/A'} to ${body.socialData.metadata?.endDate || 'N/A'} (${body.timeframeDays || 30} days)\n`;
-        dataPayload += `Summary: ${body.socialData.summary}\n`;
-        if (body.socialData.twitter && body.socialData.twitter.length) {
-          dataPayload += `\n--- TWITTER/X POSTS (${body.socialData.twitter.length}) ---\n`;
-          dataPayload += JSON.stringify(body.socialData.twitter.slice(0, 100), null, 2) + "\n";
-        }
-        if (body.socialData.reddit && body.socialData.reddit.length) {
-          dataPayload += `\n--- REDDIT POSTS (${body.socialData.reddit.length}) ---\n`;
-          dataPayload += JSON.stringify(body.socialData.reddit.slice(0, 100), null, 2) + "\n";
-        }
-        if (body.socialData.instagram && body.socialData.instagram.length) {
-          dataPayload += `\n--- INSTAGRAM POSTS (${body.socialData.instagram.length}) ---\n`;
-          dataPayload += JSON.stringify(body.socialData.instagram.slice(0, 50), null, 2) + "\n";
+      // Determine Xpoz API key: prefer frontend OAuth token, fall back to env
+      const xpozKey = body.xpozToken || env.XPOZ_API_KEY;
+      const tfDays = body.timeframeDays || 30;
+      if (xpozKey) {
+        try {
+          const sd = await fetchSocialData(kw, clientName, xpozKey, tfDays);
+          dataPayload += `\n=== XPOZ SOCIAL MEDIA DATA ===\n`;
+          dataPayload += `Timeframe: last ${tfDays} days\n`;
+          if (sd.twitter_posts && sd.twitter_posts.length) {
+            dataPayload += `\n--- TWITTER/X POSTS (${sd.twitter_posts.length}) ---\n`;
+            dataPayload += JSON.stringify(sd.twitter_posts.slice(0, 100), null, 2) + "\n";
+          }
+          if (sd.reddit_posts && sd.reddit_posts.length) {
+            dataPayload += `\n--- REDDIT POSTS (${sd.reddit_posts.length}) ---\n`;
+            dataPayload += JSON.stringify(sd.reddit_posts.slice(0, 100), null, 2) + "\n";
+          }
+          if (sd.reddit_comments && sd.reddit_comments.length) {
+            dataPayload += `\n--- REDDIT COMMENTS (${sd.reddit_comments.length}) ---\n`;
+            dataPayload += JSON.stringify(sd.reddit_comments.slice(0, 50), null, 2) + "\n";
+          }
+          if (sd.instagram_posts && sd.instagram_posts.length) {
+            dataPayload += `\n--- INSTAGRAM POSTS (${sd.instagram_posts.length}) ---\n`;
+            dataPayload += JSON.stringify(sd.instagram_posts.slice(0, 50), null, 2) + "\n";
+          }
+          dataPayload += `Summary: ${sd.summary || "Data collected via Xpoz"}\n`;
+          if (sd.error) dataPayload += `Note: ${sd.error}\n`;
+        } catch (e) {
+          dataPayload += `\n=== SOCIAL MEDIA DATA ===\nXpoz error: ${e.message}. Using web search for social data.\n`;
         }
       } else {
-        // Fallback: fetch Reddit directly + use Claude web search
-        const sd = await fetchSocialData(kw, clientName);
+        // No Xpoz token — use Reddit public API fallback
+        const sd = await fetchSocialDataFallback(kw, clientName);
         dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
       }
     }
@@ -66,7 +78,7 @@ export async function onRequestPost(context) {
     if (!env.ANTHROPIC_API_KEY) return json({ error: "No API key" }, 400);
 
     let html;
-    if (type === "social" && env.XPOZ_API_KEY) {
+    if (type === "social" && (body.xpozToken || env.XPOZ_API_KEY)) {
       // Social with Xpoz data: use web search for supplemental context
       html = await callClaudeWithWebSearch(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
     } else {
@@ -356,61 +368,86 @@ class XpozMcpClient {
   }
 }
 
-// Fetch real social media data from Twitter + Reddit via Xpoz
-async function fetchSocialData(keywords, clientName, xpozApiKey) {
+// Fetch real social media data from Twitter + Reddit + Instagram via Xpoz
+async function fetchSocialData(keywords, clientName, xpozApiKey, timeframeDays = 30) {
   if (!xpozApiKey) {
-    return { error: "No XPOZ_API_KEY configured", twitter_posts: [], reddit_posts: [] };
+    return { error: "No Xpoz token provided", twitter_posts: [], reddit_posts: [], instagram_posts: [] };
   }
 
-  const data = { twitter_posts: [], reddit_posts: [], reddit_comments: [], summary: "" };
+  const data = { twitter_posts: [], reddit_posts: [], reddit_comments: [], instagram_posts: [], summary: "" };
   const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+  const endDate = new Date().toISOString().split("T")[0];
+  const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
 
   try {
     const xpoz = new XpozMcpClient(xpozApiKey);
     await xpoz.connect();
 
     // Search Twitter
-    for (const kw of kws.slice(0, 2)) {
+    for (const kw of kws.slice(0, 3)) {
       try {
-        const result = await xpoz.callToolWithPoll("getTwitterPostsByKeywords", {
+        const result = await xpoz.callTool("getTwitterPostsByKeywords", {
           query: kw,
-          fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
-          responseType: "fast"
+          fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "quoteCount", "impressionCount"],
+          startDate, endDate
         });
         const posts = result.results || result.data || [];
-        for (const p of Array.isArray(posts) ? posts.slice(0, 50) : []) {
+        for (const p of Array.isArray(posts) ? posts.slice(0, 75) : []) {
+          p.url = p.authorUsername ? `https://x.com/${p.authorUsername}/status/${p.id}` : null;
+          p.keyword = kw;
           data.twitter_posts.push(p);
         }
-      } catch (e) { data.twitter_posts.push({ error: `Twitter search "${kw}": ${e.message}` }); }
+      } catch (e) { data.twitter_posts.push({ error: `Twitter "${kw}": ${e.message}` }); }
     }
 
     // Search Reddit
-    for (const kw of kws.slice(0, 2)) {
+    for (const kw of kws.slice(0, 3)) {
       try {
-        const result = await xpoz.callToolWithPoll("getRedditPostsByKeywords", {
+        const result = await xpoz.callTool("getRedditPostsByKeywords", {
           query: kw,
-          fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "createdAtDate", "url"],
-          responseType: "fast"
+          fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "createdAtDate", "permalink"],
+          startDate, endDate
         });
         const posts = result.results || result.data || [];
-        for (const p of Array.isArray(posts) ? posts.slice(0, 30) : []) {
+        for (const p of Array.isArray(posts) ? posts.slice(0, 50) : []) {
+          p.url = p.permalink ? `https://reddit.com${p.permalink}` : null;
+          p.keyword = kw;
           data.reddit_posts.push(p);
         }
-      } catch (e) { data.reddit_posts.push({ error: `Reddit search "${kw}": ${e.message}` }); }
+      } catch (e) { data.reddit_posts.push({ error: `Reddit "${kw}": ${e.message}` }); }
     }
 
     // Search Reddit comments
-    for (const kw of kws.slice(0, 1)) {
+    for (const kw of kws.slice(0, 2)) {
       try {
-        const result = await xpoz.callToolWithPoll("getRedditCommentsByKeywords", {
+        const result = await xpoz.callTool("getRedditCommentsByKeywords", {
           query: kw,
-          fields: ["id", "body", "authorUsername", "postSubredditName", "score", "createdAtDate"]
+          fields: ["id", "body", "authorUsername", "postSubredditName", "score", "createdAtDate"],
+          startDate, endDate
         });
         const comments = result.results || result.data || [];
-        for (const c of Array.isArray(comments) ? comments.slice(0, 20) : []) {
+        for (const c of Array.isArray(comments) ? comments.slice(0, 30) : []) {
+          c.keyword = kw;
           data.reddit_comments.push(c);
         }
       } catch (e) { data.reddit_comments.push({ error: `Reddit comments "${kw}": ${e.message}` }); }
+    }
+
+    // Search Instagram
+    for (const kw of kws.slice(0, 2)) {
+      try {
+        const result = await xpoz.callTool("getInstagramPostsByKeywords", {
+          query: kw,
+          fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
+          startDate, endDate
+        });
+        const posts = result.results || result.data || [];
+        for (const p of Array.isArray(posts) ? posts.slice(0, 30) : []) {
+          p.url = p.codeUrl ? `https://instagram.com/p/${p.codeUrl}` : null;
+          p.keyword = kw;
+          data.instagram_posts.push(p);
+        }
+      } catch (e) { data.instagram_posts.push({ error: `Instagram "${kw}": ${e.message}` }); }
     }
 
   } catch (e) {
@@ -429,6 +466,7 @@ async function fetchSocialData(keywords, clientName, xpozApiKey) {
               title: p.data.title, subreddit: p.data.subreddit_name_prefixed,
               author: p.data.author, score: p.data.score, num_comments: p.data.num_comments,
               created: new Date(p.data.created_utc * 1000).toISOString().split("T")[0],
+              url: `https://reddit.com${p.data.permalink}`,
               selftext: (p.data.selftext || "").substring(0, 300),
             });
           }
@@ -438,7 +476,36 @@ async function fetchSocialData(keywords, clientName, xpozApiKey) {
     }
   }
 
-  data.summary = `Found ${data.twitter_posts.length} Twitter posts, ${data.reddit_posts.length} Reddit posts, ${data.reddit_comments.length} Reddit comments for "${keywords}".`;
+  data.summary = `Found ${data.twitter_posts.filter(p => !p.error).length} Twitter posts, ${data.reddit_posts.filter(p => !p.error).length} Reddit posts, ${data.reddit_comments.filter(p => !p.error).length} Reddit comments, ${data.instagram_posts.filter(p => !p.error).length} Instagram posts for "${keywords}" (${startDate} to ${endDate}).`;
+  return data;
+}
+
+// Fallback social data (no Xpoz token) — Reddit public API only
+async function fetchSocialDataFallback(keywords, clientName) {
+  const data = { reddit_posts: [], reddit_comments: [], twitter_note: "Twitter data requires Xpoz connection. Connect via Settings > Xpoz.", summary: "" };
+  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+  for (const kw of kws.slice(0, 2)) {
+    try {
+      const q = encodeURIComponent(kw);
+      const r = await fetch(`https://www.reddit.com/search.json?q=${q}&sort=relevance&t=year&limit=25`, {
+        headers: { "User-Agent": "ReputationCitadel/1.0" }
+      });
+      if (r.ok) {
+        const d = await r.json();
+        for (const p of (d?.data?.children || [])) {
+          data.reddit_posts.push({
+            title: p.data.title, subreddit: p.data.subreddit_name_prefixed,
+            author: p.data.author, score: p.data.score, num_comments: p.data.num_comments,
+            created: new Date(p.data.created_utc * 1000).toISOString().split("T")[0],
+            url: `https://reddit.com${p.data.permalink}`,
+            selftext: (p.data.selftext || "").substring(0, 300),
+          });
+        }
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  data.summary = `Found ${data.reddit_posts.length} Reddit posts for "${keywords}". Twitter/Instagram data unavailable without Xpoz.`;
   return data;
 }
 function json(d, s = 200) { return new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); }
