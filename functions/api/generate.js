@@ -26,7 +26,8 @@ export async function onRequestPost(context) {
       dataPayload += `\n=== LLM RESPONSES DATA ===\n${JSON.stringify(ld, null, 2)}\n`;
     }
     if (type === "social" || type === "executive") {
-      dataPayload += `\n=== SOCIAL MEDIA ===\nClient: ${clientName}\nKeywords: ${kw}\nUse the Xpoz tools to search Twitter and Reddit for this client. Collect real posts, engagement metrics, and sentiment data.\n`;
+      const sd = await fetchSocialData(kw, clientName, env.XPOZ_API_KEY);
+      dataPayload += `\n=== SOCIAL MEDIA DATA ===\n${JSON.stringify(sd, null, 2)}\n`;
     }
     if (type === "executive" && linkedReports) {
       const base = new URL(request.url).origin;
@@ -45,11 +46,11 @@ export async function onRequestPost(context) {
     if (!env.ANTHROPIC_API_KEY) return json({ error: "No API key" }, 400);
 
     let html;
-    if (type === "social") {
-      // Social reports use MCP (Xpoz) + web search — agentic loop, no streaming
-      html = await callClaudeWithTools(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
+    if (type === "social" && env.XPOZ_API_KEY) {
+      // Social with Xpoz data: use web search for supplemental context
+      html = await callClaudeWithWebSearch(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
     } else {
-      // Other reports use streaming (faster, no tool use needed)
+      // All other reports (or social without Xpoz): streaming
       html = await callClaudeStream(env.ANTHROPIC_API_KEY, systemPrompt, userPrompt);
     }
     html = html.trim();
@@ -154,10 +155,8 @@ async function fetchLLMResponses(keywords, login, password) {
   return results;
 }
 
-// Social media data is now fetched by Claude directly via Xpoz MCP tools
-
 // ═══════════════════════════════════════
-// CLAUDE STREAMING
+// CLAUDE API CALLS
 // ═══════════════════════════════════════
 
 async function callClaudeStream(apiKey, system, user) {
@@ -188,66 +187,239 @@ async function callClaudeStream(apiKey, system, user) {
 
 function genTok() { const b = new Uint8Array(16); crypto.getRandomValues(b); return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join(""); }
 
-// Claude with Xpoz MCP tools — agentic loop for social media reports
-async function callClaudeWithTools(apiKey, system, userContent) {
+// Claude with web_search tool — agentic loop for social reports
+async function callClaudeWithWebSearch(apiKey, system, userContent) {
   const messages = [{ role: "user", content: userContent }];
   let finalText = "";
-  const maxTurns = 15; // safety limit
 
-  for (let turn = 0; turn < maxTurns; turn++) {
-    const body = {
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 64000,
-      system,
-      messages,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      mcp_servers: [{ type: "url", url: "https://mcp.xpoz.ai/mcp", name: "xpoz" }],
-    };
-
+  for (let turn = 0; turn < 10; turn++) {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 64000,
+        system,
+        messages,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+      })
     });
-
-    if (!r.ok) {
-      const e = await r.text();
-      throw new Error(`Claude ${r.status}: ${e.substring(0, 300)}`);
-    }
-
+    if (!r.ok) { const e = await r.text(); throw new Error(`Claude ${r.status}: ${e.substring(0, 300)}`); }
     const data = await r.json();
 
-    // Collect all text from this response
     let turnText = "";
-    const toolResults = [];
-
     for (const block of data.content) {
-      if (block.type === "text") {
-        turnText += block.text;
-      } else if (block.type === "tool_use" || block.type === "mcp_tool_use") {
-        // Claude wants to use a tool — we need to pass results back
-        toolResults.push({
-          type: block.type === "mcp_tool_use" ? "mcp_tool_result" : "tool_result",
-          tool_use_id: block.id,
-          content: "Tool executed by server"
-        });
-      }
+      if (block.type === "text") turnText += block.text;
     }
-
     finalText += turnText;
 
-    // If stop_reason is "end_turn" or no tool use, we're done
-    if (data.stop_reason === "end_turn" || toolResults.length === 0) {
-      break;
-    }
+    if (data.stop_reason === "end_turn") break;
 
-    // Add assistant response and tool results to continue the conversation
+    // If Claude used web_search, the API handles it server-side and continues
+    // We just need to pass the full content back for multi-turn
     messages.push({ role: "assistant", content: data.content });
+
+    // Check if there are tool_use blocks that need results
+    const toolUses = data.content.filter(b => b.type === "tool_use");
+    if (toolUses.length === 0) break;
+
+    // For server-side tools like web_search, the API handles execution
+    // But we still need to continue the conversation
+    const toolResults = toolUses.map(t => ({
+      type: "tool_result",
+      tool_use_id: t.id,
+      content: "Search completed"
+    }));
     messages.push({ role: "user", content: toolResults });
   }
 
   if (!finalText) throw new Error("Empty response from Claude");
   return finalText;
+}
+
+// ═══════════════════════════════════════
+// XPOZ MCP CLIENT (raw Streamable HTTP)
+// ═══════════════════════════════════════
+
+// Implements MCP Streamable HTTP transport to call Xpoz tools directly
+class XpozMcpClient {
+  constructor(apiKey, serverUrl = "https://mcp.xpoz.ai/mcp") {
+    this.apiKey = apiKey;
+    this.serverUrl = serverUrl;
+    this.sessionId = null;
+  }
+
+  async _send(method, params = {}) {
+    const body = { jsonrpc: "2.0", id: Date.now(), method, params };
+    const headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${this.apiKey}`,
+    };
+    if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
+
+    const r = await fetch(this.serverUrl, { method: "POST", headers, body: JSON.stringify(body) });
+
+    // Capture session ID from response
+    const sid = r.headers.get("Mcp-Session-Id");
+    if (sid) this.sessionId = sid;
+
+    const ct = r.headers.get("Content-Type") || "";
+    if (ct.includes("text/event-stream")) {
+      // Parse SSE response
+      const text = await r.text();
+      const lines = text.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const parsed = JSON.parse(line.slice(6));
+            if (parsed.result) return parsed.result;
+            if (parsed.error) throw new Error(JSON.stringify(parsed.error));
+          } catch (e) { if (e.message.includes("error")) throw e; }
+        }
+      }
+      return null;
+    }
+
+    if (!r.ok) {
+      const e = await r.text();
+      throw new Error(`Xpoz ${r.status}: ${e.substring(0, 300)}`);
+    }
+    const data = await r.json();
+    if (data.error) throw new Error(`Xpoz error: ${JSON.stringify(data.error)}`);
+    return data.result;
+  }
+
+  async connect() {
+    await this._send("initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "reputation-citadel", version: "1.0" }
+    });
+    // Send initialized notification
+    await fetch(this.serverUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+        ...(this.sessionId ? { "Mcp-Session-Id": this.sessionId } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+    });
+  }
+
+  async callTool(name, args) {
+    const result = await this._send("tools/call", { name, arguments: args });
+    if (!result || !result.content) return {};
+    let text = "";
+    for (const block of result.content) {
+      if (block.text) text += block.text;
+    }
+    try { return JSON.parse(text); } catch { return { raw: text }; }
+  }
+
+  async callToolWithPoll(name, args, timeoutMs = 120000) {
+    const result = await this.callTool(name, args);
+    const opId = result.operationId;
+    if (!opId) return result;
+
+    // Poll for completion
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await new Promise(r => setTimeout(r, 5000));
+      const status = await this.callTool("checkOperationStatus", { operationId: opId });
+      if (status.status === "failed") throw new Error(`Operation failed: ${status.error}`);
+      if (status.status === "cancelled") throw new Error("Operation cancelled");
+      if (status.status === "completed" || status.results || status.downloadUrl) return status;
+    }
+    throw new Error(`Operation timed out after ${timeoutMs}ms`);
+  }
+}
+
+// Fetch real social media data from Twitter + Reddit via Xpoz
+async function fetchSocialData(keywords, clientName, xpozApiKey) {
+  if (!xpozApiKey) {
+    return { error: "No XPOZ_API_KEY configured", twitter_posts: [], reddit_posts: [] };
+  }
+
+  const data = { twitter_posts: [], reddit_posts: [], reddit_comments: [], summary: "" };
+  const kws = keywords.split(",").map(k => k.trim()).filter(Boolean);
+
+  try {
+    const xpoz = new XpozMcpClient(xpozApiKey);
+    await xpoz.connect();
+
+    // Search Twitter
+    for (const kw of kws.slice(0, 2)) {
+      try {
+        const result = await xpoz.callToolWithPoll("getTwitterPostsByKeywords", {
+          query: kw,
+          fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
+          responseType: "fast"
+        });
+        const posts = result.results || result.data || [];
+        for (const p of Array.isArray(posts) ? posts.slice(0, 50) : []) {
+          data.twitter_posts.push(p);
+        }
+      } catch (e) { data.twitter_posts.push({ error: `Twitter search "${kw}": ${e.message}` }); }
+    }
+
+    // Search Reddit
+    for (const kw of kws.slice(0, 2)) {
+      try {
+        const result = await xpoz.callToolWithPoll("getRedditPostsByKeywords", {
+          query: kw,
+          fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "createdAtDate", "url"],
+          responseType: "fast"
+        });
+        const posts = result.results || result.data || [];
+        for (const p of Array.isArray(posts) ? posts.slice(0, 30) : []) {
+          data.reddit_posts.push(p);
+        }
+      } catch (e) { data.reddit_posts.push({ error: `Reddit search "${kw}": ${e.message}` }); }
+    }
+
+    // Search Reddit comments
+    for (const kw of kws.slice(0, 1)) {
+      try {
+        const result = await xpoz.callToolWithPoll("getRedditCommentsByKeywords", {
+          query: kw,
+          fields: ["id", "body", "authorUsername", "postSubredditName", "score", "createdAtDate"]
+        });
+        const comments = result.results || result.data || [];
+        for (const c of Array.isArray(comments) ? comments.slice(0, 20) : []) {
+          data.reddit_comments.push(c);
+        }
+      } catch (e) { data.reddit_comments.push({ error: `Reddit comments "${kw}": ${e.message}` }); }
+    }
+
+  } catch (e) {
+    data.error = `Xpoz connection error: ${e.message}`;
+    // Fallback to Reddit public API
+    for (const kw of kws.slice(0, 2)) {
+      try {
+        const q = encodeURIComponent(kw);
+        const r = await fetch(`https://www.reddit.com/search.json?q=${q}&sort=relevance&t=year&limit=25`, {
+          headers: { "User-Agent": "ReputationCitadel/1.0" }
+        });
+        if (r.ok) {
+          const d = await r.json();
+          for (const p of (d?.data?.children || [])) {
+            data.reddit_posts.push({
+              title: p.data.title, subreddit: p.data.subreddit_name_prefixed,
+              author: p.data.author, score: p.data.score, num_comments: p.data.num_comments,
+              created: new Date(p.data.created_utc * 1000).toISOString().split("T")[0],
+              selftext: (p.data.selftext || "").substring(0, 300),
+            });
+          }
+        }
+      } catch {}
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  data.summary = `Found ${data.twitter_posts.length} Twitter posts, ${data.reddit_posts.length} Reddit posts, ${data.reddit_comments.length} Reddit comments for "${keywords}".`;
+  return data;
 }
 function json(d, s = 200) { return new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); }
 
@@ -397,18 +569,9 @@ Output ONLY the completed HTML.`;
 function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-IMPORTANT — DATA COLLECTION: You have access to Xpoz tools and web search. You MUST use them to collect real data:
-1. Use getTwitterPostsByKeywords to search Twitter/X for the client's name. Collect posts, engagement, dates.
-2. Use getRedditPostsByKeywords to search Reddit for mentions. Collect posts and comments.
-3. Use web_search to find recent news articles and other social mentions.
-4. Search multiple keyword variations (full name, company name, known aliases).
-5. Categorize every post by sentiment: Positive, Neutral/Mixed, Negative, or Hateful.
-6. Identify the top most-engaged posts by impressions/likes.
-7. Identify key voices driving conversation.
-8. Build a timeline of key events.
-9. Assess risk: Low / Medium / Elevated / High / Critical.
+DATA PROVIDED: You receive real social media data collected via the Xpoz platform — including Twitter/X posts with engagement metrics, Reddit posts and comments. Analyze ALL provided data thoroughly. If web_search is available, use it to supplement with recent news articles.
 
-After collecting data, generate the report.
+Categorize every mention by sentiment: Positive, Neutral/Mixed, Negative. Identify the top most-engaged posts. Identify key voices. Build a timeline. Assess risk: Low / Medium / Elevated / High / Critical.
 
 TONE: Professional, neutral. "Mr./Ms. [Last Name]". Sanitize profanity with [expletive]. No inflammatory words (firestorm, toxic, slammed). Use: heightened scrutiny, concerns raised, online discussion.
 
