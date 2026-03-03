@@ -297,10 +297,21 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
   const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
   const sections = [];
 
+  // Convert multi-word keywords to AND query for exact matching
+  // "Murry Gunty" -> "Murry AND Gunty"
+  // "Murry Gunty, Gunty Capital" -> search each separately
+  const queryTerms = keywords.split(",").map(k => k.trim()).filter(Boolean);
+  const xpozQueries = queryTerms.map(term => {
+    const words = term.split(/\s+/).filter(Boolean);
+    return words.length > 1 ? words.join(" AND ") : term;
+  });
+  // Use first query (primary name) for main search
+  const mainQuery = xpozQueries[0] || keywords;
+
   // Twitter
   try {
     const tw = await xpozRpc(xpozToken, "tools/call", { name: "getTwitterPostsByKeywords", arguments: {
-      query: keywords, startDate, endDate,
+      query: mainQuery, startDate, endDate,
       fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
       userPrompt: `Find tweets about "${keywords}" for reputation monitoring`
     }});
@@ -310,7 +321,7 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
   // Reddit
   try {
     const rd = await xpozRpc(xpozToken, "tools/call", { name: "getRedditPostsByKeywords", arguments: {
-      query: keywords, startDate, endDate,
+      query: mainQuery, startDate, endDate,
       fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
       userPrompt: `Find Reddit posts about "${keywords}" for reputation monitoring`
     }});
@@ -320,7 +331,7 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
   // Instagram
   try {
     const ig = await xpozRpc(xpozToken, "tools/call", { name: "getInstagramPostsByKeywords", arguments: {
-      query: keywords, startDate, endDate,
+      query: mainQuery, startDate, endDate,
       fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
       userPrompt: `Find Instagram posts about "${keywords}" for reputation monitoring`
     }});
@@ -507,6 +518,8 @@ function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
 DATA PROVIDED: You receive real social media data collected via the Xpoz platform — including Twitter/X posts with engagement metrics, Reddit posts and comments, and possibly Instagram posts. Analyze ALL provided data thoroughly.
+
+CRITICAL — STRICT RELEVANCE FILTERING: The social media data may contain false positives — posts that match individual words but are NOT actually about the client. You MUST filter these out. Only include posts that genuinely refer to the specific person or entity being analyzed. For example, if the client is "Murry Gunty", discard posts about "Bill Murray", "Murry Christmas", or unrelated people named "Murry". A post is relevant ONLY if it references the client's full name, or clearly refers to the same specific person/entity through context (e.g., their company, known associates, or specific events tied to them). When in doubt, exclude the post. Report the FILTERED count (only relevant posts), not the raw search count.
 
 CRITICAL — POST LINKS: Every time you mention a specific post, tweet, or Reddit thread in the report, you MUST link directly to it. Use the "url" field from the data. For Twitter: https://x.com/{author}/status/{id}. For Reddit: use the url field. For Instagram: use the url field. Wrap titles/excerpts in <a href="URL" target="_blank"> tags. The "Most Engaged Posts" table and any inline references MUST be clickable links.
 
