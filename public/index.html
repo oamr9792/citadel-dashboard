@@ -1401,6 +1401,8 @@ window.addEventListener('message', async (e) => {
       if (data.access_token) {
         xpozToken = data.access_token;
         sessionStorage.setItem('xpoz_token', xpozToken);
+        // Persist token to backend KV for server-side use
+        try { await fetch(API + '/xpoz-token', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Password': adminPassword }, body: JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token, token_type: data.token_type, expires_in: data.expires_in }) }); } catch {}
         updateXpozStatus();
         showToast('Xpoz connected successfully!');
       } else {
