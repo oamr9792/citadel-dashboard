@@ -1358,6 +1358,8 @@ if (localStorage.getItem('citadel_authed') === 'true') {
 const XPOZ_CLIENT_ID = '1271f12b-ea4c-417b-986a-52779af06910';
 const XPOZ_REDIRECT = window.location.origin + '/oauth/callback';
 const XPOZ_MCP = 'https://mcp.xpoz.ai/mcp';
+const XPOZ_AUTH = 'https://mcp.xpoz.ai/oauth/authorize';
+const XPOZ_TOKEN = 'https://mcp.xpoz.ai/oauth/token';
 let xpozToken = sessionStorage.getItem('xpoz_token') || null;
 let xpozSessionId = null;
 
@@ -1381,7 +1383,7 @@ function connectXpoz() {
   // OAuth 2.1 PKCE flow
   const verifier = generatePKCE();
   sessionStorage.setItem('xpoz_verifier', verifier);
-  const authUrl = `${XPOZ_MCP.replace('/mcp','')}/oauth/authorize?` +
+  const authUrl = `${XPOZ_AUTH}?` +
     `response_type=code&client_id=${XPOZ_CLIENT_ID}` +
     `&redirect_uri=${encodeURIComponent(XPOZ_REDIRECT)}` +
     `&code_challenge_method=plain&code_challenge=${verifier}`;
@@ -1399,7 +1401,7 @@ window.addEventListener('message', async (e) => {
   if (e.data?.type === 'xpoz_callback' && e.data.code) {
     const verifier = sessionStorage.getItem('xpoz_verifier');
     try {
-      const resp = await fetch(XPOZ_MCP.replace('/mcp','')+'/oauth/token', {
+      const resp = await fetch(XPOZ_TOKEN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
