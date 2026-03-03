@@ -38,15 +38,17 @@ export async function onRequestPost(context) {
         // Collect data directly from Xpoz MCP (fast, ~15s)
         try {
           const sd = await fetchXpozDirect(kw, clientName, xpozKey, tfDays);
-          const tCount = sd.twitter.filter(p => !p._error).length;
-          const rCount = sd.reddit.filter(p => !p._error).length;
-          const iCount = sd.instagram.filter(p => !p._error).length;
-          dataPayload += `\n=== SOCIAL MEDIA DATA (from Xpoz) ===`;
+          const analysis = precomputeSocialAnalysis(sd, clientName, kw);
+          dataPayload += `\n=== SOCIAL MEDIA DATA (PRE-ANALYZED — USE THESE EXACT NUMBERS) ===`;
           dataPayload += `\nQuery: "${sd.meta.query}" | Period: ${sd.meta.startDate} to ${sd.meta.endDate}`;
-          dataPayload += `\nTotal posts found: Twitter=${tCount}, Reddit=${rCount}, Instagram=${iCount}`;
-          dataPayload += `\n\n--- ALL TWITTER POSTS (${tCount} total — analyze every single one) ---\n${JSON.stringify(sd.twitter, null, 1)}`;
-          dataPayload += `\n\n--- ALL REDDIT POSTS (${rCount} total — analyze every single one) ---\n${JSON.stringify(sd.reddit, null, 1)}`;
-          dataPayload += `\n\n--- ALL INSTAGRAM POSTS (${iCount} total — analyze every single one) ---\n${JSON.stringify(sd.instagram, null, 1)}\n`;
+          dataPayload += `\n\n--- COUNTS (use these exact numbers in the report) ---`;
+          dataPayload += `\nRaw posts found: Twitter=${analysis.counts.rawTwitter}, Reddit=${analysis.counts.rawReddit}, Instagram=${analysis.counts.rawInstagram}, Total=${analysis.counts.rawTotal}`;
+          dataPayload += `\nAfter relevance filtering: Twitter=${analysis.counts.twitter}, Reddit=${analysis.counts.reddit}, Instagram=${analysis.counts.instagram}, Total=${analysis.counts.filteredTotal}`;
+          dataPayload += `\nTotal engagement: ${analysis.totalEngagement}`;
+          dataPayload += `\n\n--- TOP 20 POSTS BY ENGAGEMENT (include ALL of these in the Most Engaged Posts table) ---\n${JSON.stringify(analysis.topPosts.map(p => ({ date: (p.createdAtDate||"").split("T")[0], author: p.authorUsername||p.username, platform: p.platform, engagement: p.engagement, text: (p.text||p.title||p.caption||"").substring(0, 200), url: p.url })), null, 1)}`;
+          dataPayload += `\n\n--- ALL ${analysis.counts.filteredTotal} RELEVANT POSTS (analyze ALL for sentiment, themes, timeline) ---\n${JSON.stringify(analysis.allPosts.map(p => ({ date: (p.createdAtDate||"").split("T")[0], author: p.authorUsername||p.username, platform: p.platform, engagement: p.engagement, text: (p.text||p.title||p.caption||"").substring(0, 300), url: p.url })), null, 1)}`;
+          dataPayload += `\n\n--- TIMELINE BY MONTH ---\n${JSON.stringify(Object.fromEntries(Object.entries(analysis.timeline).map(([m, posts]) => [m, posts.length])), null, 1)}`;
+          dataPayload += `\n\n--- KEY VOICES (sorted by engagement) ---\n${JSON.stringify(Object.entries(analysis.voices).sort((a,b) => b[1].totalEngagement - a[1].totalEngagement).slice(0, 15).map(([name, v]) => ({ author: name, posts: v.posts, totalEngagement: v.totalEngagement, platform: v.platform })), null, 1)}\n`;
         } catch (e) {
           dataPayload += `\n=== SOCIAL MEDIA DATA ===\nXpoz collection error: ${e.message}\n`;
           const sd = await fetchSocialDataFallback(kw, clientName);
@@ -389,6 +391,71 @@ function parseXpozCompact(text) {
   return { count, results, parsed: results.length };
 }
 
+// Pre-compute social analysis deterministically (no LLM variance)
+function precomputeSocialAnalysis(data, clientName, keywords) {
+  const kwPhrases = keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
+  function isRelevant(text) {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    return kwPhrases.some(phrase => {
+      const words = phrase.split(/\s+/);
+      return words.every(w => lower.includes(w));
+    });
+  }
+  const filtered = { twitter: [], reddit: [], instagram: [] };
+  for (const p of data.twitter) {
+    if (p._error) continue;
+    if (isRelevant(p.text)) {
+      const eng = (parseInt(p.impressionCount)||0) + (parseInt(p.likeCount)||0) + (parseInt(p.retweetCount)||0) + (parseInt(p.replyCount)||0);
+      filtered.twitter.push({ ...p, engagement: eng, platform: "Twitter/X" });
+    }
+  }
+  for (const p of data.reddit) {
+    if (p._error) continue;
+    if (isRelevant((p.title||"") + " " + (p.selftext||""))) {
+      const eng = (parseInt(p.score)||0) + (parseInt(p.commentsCount)||0);
+      filtered.reddit.push({ ...p, engagement: eng, platform: "Reddit" });
+    }
+  }
+  for (const p of data.instagram) {
+    if (p._error) continue;
+    if (isRelevant(p.caption)) {
+      const eng = (parseInt(p.likeCount)||0) + (parseInt(p.commentCount)||0);
+      filtered.instagram.push({ ...p, engagement: eng, platform: "Instagram" });
+    }
+  }
+  const allPosts = [...filtered.twitter, ...filtered.reddit, ...filtered.instagram];
+  allPosts.sort((a, b) => b.engagement - a.engagement);
+  const totalEng = allPosts.reduce((s, p) => s + p.engagement, 0);
+  // Timeline by month
+  const timeline = {};
+  for (const p of allPosts) {
+    const m = (p.createdAtDate || "").substring(0, 7);
+    if (m) { if (!timeline[m]) timeline[m] = []; timeline[m].push(p); }
+  }
+  // Key voices
+  const voices = {};
+  for (const p of allPosts) {
+    const a = p.authorUsername || p.username || "unknown";
+    if (!voices[a]) voices[a] = { posts: 0, totalEngagement: 0, platform: p.platform };
+    voices[a].posts++; voices[a].totalEngagement += p.engagement;
+  }
+  return {
+    counts: {
+      rawTotal: data.twitter.length + data.reddit.length + data.instagram.length,
+      rawTwitter: data.twitter.length, rawReddit: data.reddit.length, rawInstagram: data.instagram.length,
+      filteredTotal: allPosts.length,
+      twitter: filtered.twitter.length, reddit: filtered.reddit.length, instagram: filtered.instagram.length
+    },
+    totalEngagement: totalEng,
+    allPosts,
+    topPosts: allPosts.slice(0, 20),
+    timeline,
+    voices,
+    meta: data.meta
+  };
+}
+
 // Fallback social data (no Xpoz token) — Reddit public API only
 async function fetchSocialDataFallback(keywords, clientName) {
   const data = { reddit_posts: [], reddit_comments: [], twitter_note: "Twitter data requires Xpoz connection. Connect via Settings > Xpoz.", summary: "" };
@@ -565,19 +632,21 @@ Output ONLY the completed HTML.`;
 function buildSocialPrompt(css, hdr) {
   return `You are a social media intelligence analyst for Reputation Citadel. Generate a Social Media Intelligence Report in HTML.
 
-DATA PROVIDED: You receive structured JSON arrays of social media posts collected via the Xpoz platform. The data includes Twitter/X posts, Reddit posts, and Instagram posts. Each post has engagement metrics, author info, dates, and direct URLs.
+DATA PROVIDED: You receive PRE-ANALYZED social media data. Relevance filtering and counting have been performed deterministically by our backend. You will see exact counts, pre-sorted engagement tables, timeline data, and key voices — all pre-computed.
 
-CRITICAL — COMPREHENSIVE ANALYSIS: You are given the COMPLETE dataset. You must analyze EVERY SINGLE POST provided — do not skip, summarize away, or selectively present posts. The report must account for all posts in the data. Your metrics (post counts, sentiment percentages, engagement totals) must reflect the ENTIRE dataset. If there are 15 relevant Twitter posts, the report must reference all 15 — not a "representative sample."
+CRITICAL — USE EXACT NUMBERS: The data section "COUNTS" gives the exact numbers. Use these VERBATIM in the report. Do NOT recount, re-filter, or estimate differently. The report's Key Metrics section must match these numbers exactly.
 
-CRITICAL — STRICT RELEVANCE FILTERING: The data may contain false positives — posts matching individual words but NOT about the client. Discard any post that does NOT genuinely reference the specific person/entity. For "Murry Gunty", exclude posts about "Bill Murray", "Murry Christmas", etc. Report FILTERED counts only. Clearly state: "X posts found, Y confirmed relevant after filtering."
+CRITICAL — MOST ENGAGED TABLE: The "TOP 20 POSTS" section lists posts already sorted by engagement. Include ALL of them in the "Most Engaged Posts" table. Do not truncate, skip, or re-rank them. Each row must be a clickable link using the provided URL.
 
-CRITICAL — DETERMINISTIC RESULTS: Your analysis must be consistent. Given the same data, produce the same conclusions. Base all metrics strictly on the data provided — do not estimate or approximate. Count exact numbers.
+CRITICAL — SENTIMENT: Categorize every post in the "ALL RELEVANT POSTS" list as Positive, Neutral, or Negative. Count exact numbers. Report exact percentages. Your sentiment breakdown must account for every post (positive + neutral + negative = total filtered count from COUNTS section).
 
-CRITICAL — POST LINKS: Every post referenced must link to its URL. For Twitter: use the url field. For Reddit: use the url field. For Instagram: use the url field. The "Most Engaged Posts" table MUST include clickable links for EVERY row.
+CRITICAL — KEY VOICES: The "KEY VOICES" section lists authors sorted by engagement. Use this data directly in the Key Voices table.
+
+CRITICAL — TIMELINE: The "TIMELINE BY MONTH" section shows post counts per month. Use these to build the Timeline section.
 
 TIMEFRAME: The data covers a specific date range provided in the metadata. Reference this timeframe in the report header and executive summary (e.g., "Analysis Period: Feb 1 - Mar 1, 2026").
 
-Categorize every mention by sentiment: Positive, Neutral/Mixed, Negative. Identify the top most-engaged posts. Identify key voices. Build a timeline. Assess risk: Low / Medium / Elevated / High / Critical.
+Assess risk: Low / Medium / Elevated / High / Critical. Base this on the sentiment ratio, engagement levels, and nature of negative content.
 
 TONE: Professional, neutral. "Mr./Ms. [Last Name]". Sanitize profanity with [expletive]. No inflammatory words (firestorm, toxic, slammed). Use: heightened scrutiny, concerns raised, online discussion.
 
