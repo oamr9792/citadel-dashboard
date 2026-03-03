@@ -939,18 +939,11 @@ async function generateReport() {
       } catch (e) { console.warn('LLM report failed:', e.message); }
 
       // Step 3: Social Media Report
-      setProgress(55, 'Step 3/4 — Collecting social media data via Xpoz...');
+      setProgress(55, 'Step 3/4 — Generating Social Media Intelligence Report...');
       try {
         const tfDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
-        let socialPayload = { clientId, clientName: client.name, type: 'social', keywords: kw, sheetUrl };
-        if (xpozToken) {
-          try {
-            const xData = await collectXpozData(kw, tfDays);
-            socialPayload.socialData = xData;
-            setProgress(65, 'Step 3/4 — Generating Social Media Intelligence Report...');
-          } catch (xe) { console.warn('Xpoz collection failed, using fallback:', xe); }
-        }
-        socialPayload.timeframeDays = tfDays;
+        let socialPayload = { clientId, clientName: client.name, type: 'social', keywords: kw, sheetUrl, timeframeDays: tfDays };
+        if (xpozToken) socialPayload.xpozToken = xpozToken;
         const socialResult = await callGenerate(password, socialPayload);
         if (socialResult.report) { reportIds.social = socialResult.report; state.reports.unshift(socialResult.report); }
       } catch (e) { console.warn('Social report failed:', e.message); }
@@ -982,18 +975,10 @@ async function generateReport() {
       // ── Single report generation ──
       let body = { clientId, clientName: client.name, type, keywords: kw, sheetUrl };
 
-      // If social report, collect Xpoz data first
-      if ((type === 'social') && xpozToken) {
-        setProgress(10, 'Collecting social media data via Xpoz...');
-        try {
-          const tfDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
-          const xData = await collectXpozData(kw, tfDays);
-          body.socialData = xData;
-          body.timeframeDays = tfDays;
-        } catch (xe) { console.warn('Xpoz collection failed, using fallback:', xe); }
-      }
-      if (type === 'social') {
+      // If social report, pass Xpoz token so backend can collect data
+      if (type === 'social' || type === 'executive') {
         body.timeframeDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
+        if (xpozToken) body.xpozToken = xpozToken;
       }
 
       setProgress(20, 'Fetching data & generating report (this takes 30-90 seconds)...');
