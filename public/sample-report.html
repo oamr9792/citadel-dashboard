@@ -37,27 +37,17 @@
 
   .page { max-width: 860px; margin: 0 auto; padding: 48px 32px 80px; }
 
-  /* Header */
   .report-header {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    padding-bottom: 28px;
-    border-bottom: 2px solid var(--text);
+    padding: 20px 28px;
+    background: #0e0f11;
+    border-radius: 8px;
     margin-bottom: 36px;
   }
 
-  .logo-block { display: flex; align-items: center; gap: 12px; }
-
-  .logo-mark {
-    width: 40px;
-    height: 40px;
-    background: var(--text);
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+  .logo-block { display: flex; align-items: center; }
 
   .logo-text {
     font-family: 'DM Mono', monospace;
@@ -73,7 +63,7 @@
   .report-title {
     font-size: 11px;
     font-family: 'DM Mono', monospace;
-    color: var(--text3);
+    color: #c8f060;
     text-transform: uppercase;
     letter-spacing: .08em;
     margin-bottom: 4px;
@@ -82,17 +72,16 @@
   .report-client {
     font-size: 18px;
     font-weight: 500;
-    color: var(--text);
+    color: #ffffff;
     margin-bottom: 2px;
   }
 
   .report-date {
     font-size: 12px;
-    color: var(--text3);
+    color: #888880;
     font-family: 'DM Mono', monospace;
   }
 
-  /* Section */
   .section { margin-bottom: 40px; }
 
   .section-label {
@@ -106,14 +95,12 @@
     border-bottom: 1px solid var(--border);
   }
 
-  /* Executive summary */
   .summary-text {
     font-size: 14px;
     color: var(--text2);
     line-height: 1.8;
   }
 
-  /* Metrics grid */
   .metrics-grid {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -151,16 +138,13 @@
     line-height: 1.3;
   }
 
-  /* Tables */
   table {
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
   }
 
-  thead tr {
-    background: var(--surface2);
-  }
+  thead tr { background: var(--surface2); }
 
   th {
     font-family: 'DM Mono', monospace;
@@ -206,10 +190,7 @@
   .badge-neg { background: var(--red-bg); color: var(--red); }
   .badge-neu { background: var(--surface2); color: var(--text3); }
 
-  .owned-star {
-    color: var(--text);
-    font-size: 14px;
-  }
+  .owned-star { color: var(--text); font-size: 14px; }
 
   .movement {
     font-family: 'DM Mono', monospace;
@@ -221,7 +202,6 @@
   .movement.down { color: var(--green); }
   .movement.flat { color: var(--text3); }
 
-  /* Sentiment bar */
   .sentiment-bar {
     display: flex;
     height: 10px;
@@ -250,7 +230,6 @@
     vertical-align: middle;
   }
 
-  /* Action items */
   .action-list { list-style: none; }
 
   .action-list li {
@@ -274,12 +253,10 @@
     padding-top: 2px;
   }
 
-  /* Trend table */
   .trend-up { color: var(--red); font-family: 'DM Mono', monospace; font-size: 12px; }
   .trend-down { color: var(--green); font-family: 'DM Mono', monospace; font-size: 12px; }
   .trend-flat { color: var(--text3); font-family: 'DM Mono', monospace; font-size: 12px; }
 
-  /* Footer */
   .report-footer {
     margin-top: 48px;
     padding-top: 20px;
@@ -310,27 +287,17 @@
 <body>
 <div class="page">
 
-  <!-- HEADER -->
   <div class="report-header">
     <div class="logo-block">
-      <div class="logo-mark">
-        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-          <rect x="3" y="12" width="4" height="7" fill="white"/>
-          <rect x="9" y="7" width="4" height="12" fill="white"/>
-          <rect x="15" y="3" width="4" height="16" fill="white"/>
-          <path d="M2 19 Q11 13 20 19" stroke="white" stroke-width="1.5" fill="none"/>
-        </svg>
-      </div>
-      <div class="logo-text">Reputation<br>Citadel</div>
+      <img src="/logo.png" style="height:44px;width:auto;" alt="Reputation Citadel">
     </div>
     <div class="report-meta">
-      <div class="report-title">SERP & Online Reputation Report</div>
+      <div class="report-title">SERP &amp; Online Reputation Report</div>
       <div class="report-client">Client — Anonymised Sample</div>
       <div class="report-date">March 2026</div>
     </div>
   </div>
 
-  <!-- EXECUTIVE SUMMARY -->
   <div class="section">
     <div class="section-label">Executive Summary</div>
     <p class="summary-text">
@@ -339,7 +306,6 @@
     </p>
   </div>
 
-  <!-- KEY METRICS -->
   <div class="section">
     <div class="section-label">Key Metrics Dashboard</div>
     <div class="metrics-grid">
@@ -370,7 +336,6 @@
     </div>
   </div>
 
-  <!-- TREND ANALYSIS -->
   <div class="section">
     <div class="section-label">Trend Analysis</div>
     <table>
@@ -405,7 +370,6 @@
     </table>
   </div>
 
-  <!-- SERP OWNERSHIP MAP -->
   <div class="section">
     <div class="section-label">SERP Ownership Map</div>
     <table>
@@ -505,7 +469,6 @@
     <p style="font-size:11px;color:var(--text3);margin-top:8px;font-family:'DM Mono',monospace">★ = owned asset &nbsp;·&nbsp; ↑ = moved up (negative) &nbsp;·&nbsp; ↓ = moved down (positive) &nbsp;·&nbsp; – = no movement</p>
   </div>
 
-  <!-- SENTIMENT -->
   <div class="section">
     <div class="section-label">Sentiment Analysis</div>
     <div class="sentiment-bar" style="margin-bottom:10px">
@@ -550,7 +513,6 @@
     </table>
   </div>
 
-  <!-- OWNED CONTENT PERFORMANCE -->
   <div class="section">
     <div class="section-label">Owned Content Performance</div>
     <table>
@@ -596,7 +558,6 @@
     </table>
   </div>
 
-  <!-- NEGATIVE EXPOSURE -->
   <div class="section">
     <div class="section-label">Negative Exposure Analysis</div>
     <table>
@@ -656,7 +617,6 @@
     </table>
   </div>
 
-  <!-- ACTION ITEMS -->
   <div class="section">
     <div class="section-label">Action Items — Next Period</div>
     <ul class="action-list">
@@ -687,9 +647,8 @@
     </ul>
   </div>
 
-  <!-- FOOTER -->
   <div class="report-footer">
-    <span>Reputation Citadel · SERP & Online Reputation Report · March 2026</span>
+    <span>Reputation Citadel · SERP &amp; Online Reputation Report · March 2026</span>
     <span class="confidential-badge">Confidential — Sample Report</span>
   </div>
 
