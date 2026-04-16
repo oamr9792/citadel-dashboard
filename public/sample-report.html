@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SERP & Online Reputation Report — Sample</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f8f8f6;
+    --surface2: #f0f0ec;
+    --border: #e0e0d8;
+    --text: #1a1a18;
+    --text2: #555550;
+    --text3: #888880;
+    --accent: #1a1a18;
+    --green: #2a7a4a;
+    --green-bg: #eaf4ee;
+    --red: #a32020;
+    --red-bg: #fceaea;
+    --amber: #7a5000;
+    --amber-bg: #fdf3e0;
+    --blue: #1a3a6a;
+    --blue-bg: #e8eef8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .page { max-width: 860px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  /* Header */
+  .report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding-bottom: 28px;
+    border-bottom: 2px solid var(--text);
+    margin-bottom: 36px;
+  }
+
+  .logo-block { display: flex; align-items: center; gap: 12px; }
+
+  .logo-mark {
+    width: 40px;
+    height: 40px;
+    background: var(--text);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .logo-text {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+
+  .report-meta { text-align: right; }
+
+  .report-title {
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 4px;
+  }
+
+  .report-client {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .report-date {
+    font-size: 12px;
+    color: var(--text3);
+    font-family: 'DM Mono', monospace;
+  }
+
+  /* Section */
+  .section { margin-bottom: 40px; }
+
+  .section-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--text3);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Executive summary */
+  .summary-text {
+    font-size: 14px;
+    color: var(--text2);
+    line-height: 1.8;
+  }
+
+  /* Metrics grid */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .metric {
+    background: var(--bg);
+    padding: 16px 12px;
+    text-align: center;
+  }
+
+  .metric-val {
+    font-size: 28px;
+    font-weight: 300;
+    color: var(--text);
+    line-height: 1;
+    margin-bottom: 6px;
+    font-family: 'DM Mono', monospace;
+  }
+
+  .metric-val.green { color: var(--green); }
+  .metric-val.red { color: var(--red); }
+
+  .metric-label {
+    font-size: 10px;
+    color: var(--text3);
+    font-family: 'DM Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    line-height: 1.3;
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead tr {
+    background: var(--surface2);
+  }
+
+  th {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text3);
+    font-weight: 400;
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: middle;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface); }
+
+  .blurred {
+    filter: blur(4px);
+    user-select: none;
+    pointer-events: none;
+    color: var(--text2);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .badge-pos { background: var(--green-bg); color: var(--green); }
+  .badge-neg { background: var(--red-bg); color: var(--red); }
+  .badge-neu { background: var(--surface2); color: var(--text3); }
+
+  .owned-star {
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .movement {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .movement.up { color: var(--red); }
+  .movement.down { color: var(--green); }
+  .movement.flat { color: var(--text3); }
+
+  /* Sentiment bar */
+  .sentiment-bar {
+    display: flex;
+    height: 10px;
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .sent-pos { background: var(--green); }
+  .sent-neu { background: var(--border); }
+  .sent-neg { background: var(--red); }
+
+  .sentiment-legend {
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+
+  /* Action items */
+  .action-list { list-style: none; }
+
+  .action-list li {
+    display: flex;
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text2);
+    line-height: 1.6;
+  }
+
+  .action-list li:last-child { border-bottom: none; }
+
+  .action-num {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text3);
+    min-width: 20px;
+    padding-top: 2px;
+  }
+
+  /* Trend table */
+  .trend-up { color: var(--red); font-family: 'DM Mono', monospace; font-size: 12px; }
+  .trend-down { color: var(--green); font-family: 'DM Mono', monospace; font-size: 12px; }
+  .trend-flat { color: var(--text3); font-family: 'DM Mono', monospace; font-size: 12px; }
+
+  /* Footer */
+  .report-footer {
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text3);
+    font-family: 'DM Mono', monospace;
+  }
+
+  .confidential-badge {
+    background: var(--surface2);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  @media print {
+    body { font-size: 12px; }
+    .page { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="report-header">
+    <div class="logo-block">
+      <div class="logo-mark">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+          <rect x="3" y="12" width="4" height="7" fill="white"/>
+          <rect x="9" y="7" width="4" height="12" fill="white"/>
+          <rect x="15" y="3" width="4" height="16" fill="white"/>
+          <path d="M2 19 Q11 13 20 19" stroke="white" stroke-width="1.5" fill="none"/>
+        </svg>
+      </div>
+      <div class="logo-text">Reputation<br>Citadel</div>
+    </div>
+    <div class="report-meta">
+      <div class="report-title">SERP & Online Reputation Report</div>
+      <div class="report-client">Client — Anonymised Sample</div>
+      <div class="report-date">March 2026</div>
+    </div>
+  </div>
+
+  <!-- EXECUTIVE SUMMARY -->
+  <div class="section">
+    <div class="section-label">Executive Summary</div>
+    <p class="summary-text">
+      Our analysis of the March 2026 search landscape reveals a mixed but improving digital presence. Primary owned assets maintain strong positioning, with the official website and YouTube channel securing positions #2 and #4 respectively in the top 10 results. Five owned properties sit within first-page results, representing 50% ownership of critical digital real estate.<br><br>
+      A significant negative story has moved up to position #6, gaining 6 positions from the previous month. Three negative results currently occupy top 10 positions, representing 30% of first-page visibility. The positive development is the strong performance of recently published thought leadership content, which demonstrates continued authority in the client's specialist area. Overall sentiment distribution shows 63% positive coverage.
+    </p>
+  </div>
+
+  <!-- KEY METRICS -->
+  <div class="section">
+    <div class="section-label">Key Metrics Dashboard</div>
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-val">30</div>
+        <div class="metric-label">Results Analysed</div>
+      </div>
+      <div class="metric">
+        <div class="metric-val green">5</div>
+        <div class="metric-label">Owned Top 10</div>
+      </div>
+      <div class="metric">
+        <div class="metric-val red">3</div>
+        <div class="metric-label">Negative Top 10</div>
+      </div>
+      <div class="metric">
+        <div class="metric-val green">63%</div>
+        <div class="metric-label">Positive %</div>
+      </div>
+      <div class="metric">
+        <div class="metric-val red">30%</div>
+        <div class="metric-label">Negative %</div>
+      </div>
+      <div class="metric">
+        <div class="metric-val green">50%</div>
+        <div class="metric-label">Page 1 Control</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TREND ANALYSIS -->
+  <div class="section">
+    <div class="section-label">Trend Analysis</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Owned Top 10</th>
+          <th>Movement</th>
+          <th>Negative Top 10</th>
+          <th>Movement</th>
+          <th>Overall Sentiment</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;font-size:12px">March 2026</td>
+          <td>5</td>
+          <td><span class="trend-flat">–</span></td>
+          <td>3</td>
+          <td><span class="trend-up">↑1</span></td>
+          <td><span class="badge badge-pos">63% Positive</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;font-size:12px">February 2026</td>
+          <td>5</td>
+          <td><span class="trend-flat">–</span></td>
+          <td>2</td>
+          <td><span class="trend-flat">–</span></td>
+          <td><span class="badge badge-pos">67% Positive</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- SERP OWNERSHIP MAP -->
+  <div class="section">
+    <div class="section-label">SERP Ownership Map</div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Title</th>
+          <th>Domain</th>
+          <th>Sentiment</th>
+          <th>Owned</th>
+          <th>Movement</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">1</td>
+          <td class="blurred">Official directory listing — professional appointments</td>
+          <td class="blurred">government-registry.gov.uk</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td></td>
+          <td><span class="movement down">↑1</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">2</td>
+          <td class="blurred">Client — Official Website</td>
+          <td class="blurred">clientname.com</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td><span class="owned-star">★</span></td>
+          <td><span class="movement up">↓1</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">3</td>
+          <td class="blurred">Client profile — entertainment/media directory</td>
+          <td class="blurred">mediaprofiles.com</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td></td>
+          <td><span class="movement flat">–</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">4</td>
+          <td class="blurred">Client — YouTube Channel</td>
+          <td class="blurred">youtube.com</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td><span class="owned-star">★</span></td>
+          <td><span class="movement down">↑1</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">5</td>
+          <td class="blurred">Client — Author / Advisor Profile</td>
+          <td class="blurred">featured.com</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td><span class="owned-star">★</span></td>
+          <td><span class="movement up">↓1</span></td>
+        </tr>
+        <tr style="background: #fff8f8;">
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">6</td>
+          <td class="blurred">Client — negative story, national publication</td>
+          <td class="blurred">nationalpaper.co.uk</td>
+          <td><span class="badge badge-neg">Negative</span></td>
+          <td></td>
+          <td><span class="movement up" style="font-weight:500">↑6</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">7</td>
+          <td class="blurred">Client personal appointments — Companies House</td>
+          <td class="blurred">companies-house.gov.uk</td>
+          <td><span class="badge badge-neu">Neutral</span></td>
+          <td></td>
+          <td><span class="movement flat">–</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">8</td>
+          <td class="blurred">Expert commentary — industry publication</td>
+          <td class="blurred">industrypublication.com</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td><span class="owned-star">★</span></td>
+          <td><span class="movement up">↓2</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">9</td>
+          <td class="blurred">Charity trustee listing — Charity Commission</td>
+          <td class="blurred">charitycommission.gov.uk</td>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td></td>
+          <td><span class="movement up">↓1</span></td>
+        </tr>
+        <tr style="background: #fff8f8;">
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">10</td>
+          <td class="blurred">Client — negative story, national broadsheet</td>
+          <td class="blurred">broadsheet.co.uk</td>
+          <td><span class="badge badge-neg">Negative</span></td>
+          <td></td>
+          <td><span class="movement down">↓1</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size:11px;color:var(--text3);margin-top:8px;font-family:'DM Mono',monospace">★ = owned asset &nbsp;·&nbsp; ↑ = moved up (negative) &nbsp;·&nbsp; ↓ = moved down (positive) &nbsp;·&nbsp; – = no movement</p>
+  </div>
+
+  <!-- SENTIMENT -->
+  <div class="section">
+    <div class="section-label">Sentiment Analysis</div>
+    <div class="sentiment-bar" style="margin-bottom:10px">
+      <div class="sent-pos" style="width:63%"></div>
+      <div class="sent-neu" style="width:7%"></div>
+      <div class="sent-neg" style="width:30%"></div>
+    </div>
+    <div class="sentiment-legend" style="margin-bottom:20px">
+      <span><span class="legend-dot" style="background:var(--green)"></span>Positive 63%</span>
+      <span><span class="legend-dot" style="background:var(--border)"></span>Neutral 7%</span>
+      <span><span class="legend-dot" style="background:var(--red)"></span>Negative 30%</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Sentiment</th>
+          <th>Count</th>
+          <th>%</th>
+          <th>Key sources</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="badge badge-pos">Positive</span></td>
+          <td>19</td>
+          <td>63%</td>
+          <td class="blurred">clientsite.com, industrypub.com, youtube.com</td>
+        </tr>
+        <tr>
+          <td><span class="badge badge-neu">Neutral</span></td>
+          <td>2</td>
+          <td>7%</td>
+          <td class="blurred">government-registry.gov.uk</td>
+        </tr>
+        <tr>
+          <td><span class="badge badge-neg">Negative</span></td>
+          <td>9</td>
+          <td>30%</td>
+          <td class="blurred">nationalpaper.co.uk, broadsheet.co.uk, blog.com</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- OWNED CONTENT PERFORMANCE -->
+  <div class="section">
+    <div class="section-label">Owned Content Performance</div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Asset</th>
+          <th>Domain</th>
+          <th>Performance</th>
+          <th>Opportunity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">2</td>
+          <td class="blurred">Official Website — Homepage</td>
+          <td class="blurred">clientname.com</td>
+          <td><span class="badge badge-pos">Excellent — Top 3</span></td>
+          <td style="color:var(--text2);font-size:12px">Maintain position against competitive pressure</td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">4</td>
+          <td class="blurred">YouTube Channel</td>
+          <td class="blurred">youtube.com</td>
+          <td><span class="badge badge-pos">Strong — Top 5</span></td>
+          <td style="color:var(--text2);font-size:12px">Increase content frequency and keyword targeting</td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">5</td>
+          <td class="blurred">Expert Profile — third-party platform</td>
+          <td class="blurred">featured.com</td>
+          <td><span class="badge badge-pos">Good — Top 5</span></td>
+          <td style="color:var(--text2);font-size:12px">Update with recent achievements</td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">8</td>
+          <td class="blurred">Thought leadership article — industry publication</td>
+          <td class="blurred">industrypublication.com</td>
+          <td><span class="badge badge-pos">Good — Top 10</span></td>
+          <td style="color:var(--text2);font-size:12px">Cross-promote on owned channels</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- NEGATIVE EXPOSURE -->
+  <div class="section">
+    <div class="section-label">Negative Exposure Analysis</div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Movement</th>
+          <th>Title</th>
+          <th>Domain</th>
+          <th>Category</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="background:#fff8f8">
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">6</td>
+          <td><span class="movement up" style="font-weight:500">↑6</span></td>
+          <td class="blurred">Negative story — national publication</td>
+          <td class="blurred">nationalpaper.co.uk</td>
+          <td><span class="badge badge-neg">Crisis Coverage</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">10</td>
+          <td><span class="movement down">↓1</span></td>
+          <td class="blurred">Follow-up negative story — broadsheet</td>
+          <td class="blurred">broadsheet.co.uk</td>
+          <td><span class="badge badge-neg">Crisis Coverage</span></td>
+        </tr>
+        <tr style="background:#fff8f8">
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">11</td>
+          <td><span class="movement up">↑1</span></td>
+          <td class="blurred">Syndicated negative story — national publication</td>
+          <td class="blurred">nationalpaper.co.uk</td>
+          <td><span class="badge badge-neg">Crisis Coverage</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">14</td>
+          <td><span class="movement down">↓1</span></td>
+          <td class="blurred">Industry news — negative framing</td>
+          <td class="blurred">industrynews.co.uk</td>
+          <td><span class="badge" style="background:var(--amber-bg);color:var(--amber)">Industry News</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">17</td>
+          <td><span class="movement down">↓1</span></td>
+          <td class="blurred">Personal attack — blog</td>
+          <td class="blurred">blog-platform.com</td>
+          <td><span class="badge badge-neg">Personal Attack</span></td>
+        </tr>
+        <tr>
+          <td style="font-family:'DM Mono',monospace;color:var(--text3)">21</td>
+          <td><span class="movement up">↑3</span></td>
+          <td class="blurred">Negative social discussion</td>
+          <td class="blurred">facebook.com</td>
+          <td><span class="badge badge-neu">Social Discussion</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ACTION ITEMS -->
+  <div class="section">
+    <div class="section-label">Action Items — Next Period</div>
+    <ul class="action-list">
+      <li>
+        <span class="action-num">01</span>
+        <span>Implement an immediate content velocity strategy, producing 3–4 authoritative pieces per month focused on the client's core expertise areas to build positive momentum and push down the negative story that has gained 6 positions this month.</span>
+      </li>
+      <li>
+        <span class="action-num">02</span>
+        <span>Optimise the YouTube channel with a consistent publishing schedule and strategic keyword targeting to strengthen position #4 and challenge for position #3 against the current third-party result.</span>
+      </li>
+      <li>
+        <span class="action-num">03</span>
+        <span>Develop dedicated landing pages on the official website for trustee roles and professional services to capture additional search visibility for branded and credential-based queries.</span>
+      </li>
+      <li>
+        <span class="action-num">04</span>
+        <span>Initiate outreach to positive industry publications to secure guest content opportunities and interviews that generate new positive results over the coming months.</span>
+      </li>
+      <li>
+        <span class="action-num">05</span>
+        <span>Monitor the upward movement of the primary negative story and prepare additional content assets to maintain the positive content buffer against this exposure area.</span>
+      </li>
+      <li>
+        <span class="action-num">06</span>
+        <span>Enhance internal linking between owned properties to strengthen their collective authority and defend the current 50% first-page ownership position.</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="report-footer">
+    <span>Reputation Citadel · SERP & Online Reputation Report · March 2026</span>
+    <span class="confidential-badge">Confidential — Sample Report</span>
+  </div>
+
+</div>
+</body>
+</html>
