@@ -264,6 +264,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  text-decoration: none;
 }
 
 .btn:hover { background: var(--border); }
@@ -574,6 +575,12 @@ table tr:hover td { background: var(--surface-2); }
     <div class="page" id="page-reports">
       <div class="topbar">
         <h1>Reports</h1>
+        <div class="topbar-actions">
+          <a href="/sample-report.html" target="_blank" class="btn btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            View Sample Report
+          </a>
+        </div>
       </div>
       <div class="content">
         <div class="form-group" style="max-width:300px;margin-bottom:20px">
@@ -781,7 +788,7 @@ let state = {
 };
 
 // ══════════════════════════════════════════
-// PERSISTENCE (localStorage for Phase 1, KV in Phase 2)
+// PERSISTENCE
 // ══════════════════════════════════════════
 function loadState() {
   try {
@@ -815,7 +822,6 @@ function login() {
     document.getElementById('app').classList.add('active');
     loadState();
     refreshUI();
-    // Sync with backend
     syncReportsFromBackend();
     uploadLogoToKV();
   } else {
@@ -878,7 +884,6 @@ function addClient() {
   showToast(`Client "${name}" added`);
   refreshUI();
 
-  // Clear form
   ['client-name','client-keywords','client-sheet','client-email','client-notes'].forEach(id => {
     document.getElementById(id).value = '';
   });
@@ -912,7 +917,6 @@ async function generateReport() {
   const client = state.clients.find(c => c.id === clientId);
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
 
-  // Show progress
   document.getElementById('gen-progress').style.display = 'block';
   document.getElementById('gen-button').disabled = true;
 
@@ -921,24 +925,20 @@ async function generateReport() {
 
   try {
     if (type === 'executive') {
-      // ── Generate All Reports then Executive Summary ──
       const reportIds = {};
 
-      // Step 1: SERP Report
       setProgress(10, 'Step 1/4 — Generating SERP & ORM Report...');
       try {
         const serpResult = await callGenerate(password, { clientId, clientName: client.name, type: 'serp', keywords: kw, sheetUrl });
         if (serpResult.report) { reportIds.serp = serpResult.report; state.reports.unshift(serpResult.report); }
       } catch (e) { console.warn('SERP report failed:', e.message); }
 
-      // Step 2: LLM Report
       setProgress(30, 'Step 2/4 — Generating LLM Reputation Intelligence Report...');
       try {
         const llmResult = await callGenerate(password, { clientId, clientName: client.name, type: 'llm', keywords: kw, sheetUrl });
         if (llmResult.report) { reportIds.llm = llmResult.report; state.reports.unshift(llmResult.report); }
       } catch (e) { console.warn('LLM report failed:', e.message); }
 
-      // Step 3: Social Media Report
       setProgress(55, 'Step 3/4 — Generating Social Media Intelligence Report...');
       try {
         const tfDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
@@ -948,7 +948,6 @@ async function generateReport() {
         if (socialResult.report) { reportIds.social = socialResult.report; state.reports.unshift(socialResult.report); }
       } catch (e) { console.warn('Social report failed:', e.message); }
 
-      // Step 4: Executive Summary with links to the other reports
       setProgress(75, 'Step 4/4 — Generating Executive Summary with report links...');
       const execResult = await callGenerate(password, {
         clientId, clientName: client.name, type: 'executive', keywords: kw, sheetUrl,
@@ -972,10 +971,8 @@ async function generateReport() {
       }, 1200);
 
     } else {
-      // ── Single report generation ──
       let body = { clientId, clientName: client.name, type, keywords: kw, sheetUrl };
 
-      // If social report, pass Xpoz token so backend can collect data
       if (type === 'social' || type === 'executive') {
         body.timeframeDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
         if (xpozToken) body.xpozToken = xpozToken;
@@ -1022,7 +1019,6 @@ function setProgress(pct, msg) {
   document.getElementById('gen-status').textContent = msg;
 }
 
-// Update button label when report type changes
 document.getElementById('gen-type').addEventListener('change', function() {
   const btn = document.getElementById('gen-button');
   const hint = document.getElementById('gen-exec-hint');
@@ -1088,7 +1084,6 @@ function saveSchedule() {
 // UI REFRESH
 // ══════════════════════════════════════════
 function refreshUI() {
-  // Stats
   document.getElementById('stat-clients').textContent = state.clients.length;
   document.getElementById('stat-reports').textContent = state.reports.length;
 
@@ -1098,7 +1093,6 @@ function refreshUI() {
     return !state.reports.some(r => r.clientId === c.id && r.createdAt.startsWith(thisMonth));
   }).length;
 
-  // Clients table
   const tbody = document.getElementById('clients-table');
   if (state.clients.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:40px">No clients yet</td></tr>';
@@ -1119,7 +1113,6 @@ function refreshUI() {
     }).join('');
   }
 
-  // Client dropdowns
   const clientOptions = '<option value="">Select a client...</option>' +
     state.clients.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   document.getElementById('gen-client').innerHTML = clientOptions;
@@ -1128,7 +1121,6 @@ function refreshUI() {
     state.clients.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   document.getElementById('reports-client-filter').innerHTML = filterOptions;
 
-  // Auto-fill sheet URL when client selected
   document.getElementById('gen-client').onchange = function() {
     const client = state.clients.find(c => c.id === this.value);
     if (client) {
@@ -1137,7 +1129,6 @@ function refreshUI() {
     }
   };
 
-  // Reports list
   const filter = document.getElementById('reports-client-filter').value;
   const filtered = filter === 'all' ? state.reports : state.reports.filter(r => r.clientId === filter);
 
@@ -1172,7 +1163,6 @@ function refreshUI() {
     }).join('');
   }
 
-  // Recent reports on dashboard
   const recent = state.reports.slice(0, 5);
   const recentEl = document.getElementById('recent-reports');
   if (recent.length === 0) {
@@ -1189,20 +1179,17 @@ function refreshUI() {
     </div>`).join('');
   }
 
-  // Settings
   if (state.settings.anthropicKey) document.getElementById('set-anthropic').value = state.settings.anthropicKey;
   if (state.settings.dfsLogin) document.getElementById('set-dfs-login').value = state.settings.dfsLogin;
   if (state.settings.dfsPassword) document.getElementById('set-dfs-password').value = state.settings.dfsPassword;
   document.getElementById('set-schedule').value = state.settings.schedule || 'off';
 }
 
-// View report in new tab
 async function viewReport(reportId) {
   const report = state.reports.find(r => r.id === reportId);
   if (report && report.shareToken) {
     window.open('/share/' + report.shareToken, '_blank');
   } else {
-    // Fallback: fetch via API
     const password = localStorage.getItem('citadel_password') || 'citadel2025';
     try {
       const resp = await fetch(`/api/report-html?id=${reportId}`, {
@@ -1222,7 +1209,6 @@ async function viewReport(reportId) {
   }
 }
 
-// Download report as PDF (uses browser print)
 async function downloadPdf(reportId, clientName) {
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
   try {
@@ -1234,10 +1220,7 @@ async function downloadPdf(reportId, clientName) {
       const win = window.open('', '_blank');
       win.document.write(html);
       win.document.close();
-      // Wait for content to render then trigger print
-      setTimeout(() => {
-        win.print();
-      }, 1500);
+      setTimeout(() => { win.print(); }, 1500);
     } else {
       showToast('Could not load report for PDF');
     }
@@ -1246,7 +1229,6 @@ async function downloadPdf(reportId, clientName) {
   }
 }
 
-// Sync reports from backend (on load)
 async function syncReportsFromBackend() {
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
   try {
@@ -1256,14 +1238,10 @@ async function syncReportsFromBackend() {
     if (resp.ok) {
       const data = await resp.json();
       if (data.reports && data.reports.length > 0) {
-        // Merge backend reports with local state
         const existingIds = new Set(state.reports.map(r => r.id));
         for (const r of data.reports) {
-          if (!existingIds.has(r.id)) {
-            state.reports.push(r);
-          }
+          if (!existingIds.has(r.id)) { state.reports.push(r); }
         }
-        // Sort by date descending
         state.reports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
         saveState();
         refreshUI();
@@ -1272,32 +1250,21 @@ async function syncReportsFromBackend() {
   } catch {}
 }
 
-// Upload logo to KV on first setup
 async function uploadLogoToKV() {
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
   try {
-    // Check if logo is already stored
-    const check = await fetch('/api/logo', {
-      headers: { 'X-Admin-Password': password },
-    });
+    const check = await fetch('/api/logo', { headers: { 'X-Admin-Password': password } });
     const checkData = await check.json();
-    if (checkData.hasLogo) return; // Already uploaded
-
-    // Fetch the logo from the static file
+    if (checkData.hasLogo) return;
     const logoResp = await fetch('/logo.png');
     if (!logoResp.ok) return;
     const blob = await logoResp.blob();
-
-    // Convert to base64
     const reader = new FileReader();
     reader.onload = async () => {
-      const base64 = reader.result.split(',')[1]; // Remove data:... prefix
+      const base64 = reader.result.split(',')[1];
       await fetch('/api/logo', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Admin-Password': password,
-        },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
         body: JSON.stringify({ base64 }),
       });
     };
@@ -1324,17 +1291,11 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('active'), 3000);
 }
 
-// Close modals on backdrop click
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) overlay.classList.remove('active');
   });
 });
-
-// Check for auto-login (session)
-if (localStorage.getItem('citadel_authed') === 'true') {
-  // For convenience during dev — remove in production
-}
 
 // ══════════════════════════════════════════
 // XPOZ SOCIAL INTELLIGENCE INTEGRATION
@@ -1348,7 +1309,6 @@ const XPOZ_TOKEN = 'https://mcp.xpoz.ai/oauth/token';
 let xpozToken = sessionStorage.getItem('xpoz_token') || null;
 let xpozSessionId = null;
 
-// Update Xpoz status on load
 updateXpozStatus();
 
 function updateXpozStatus() {
@@ -1365,7 +1325,6 @@ function updateXpozStatus() {
 }
 
 function connectXpoz() {
-  // OAuth 2.1 PKCE flow
   const verifier = generatePKCE();
   sessionStorage.setItem('xpoz_verifier', verifier);
   const authUrl = `${XPOZ_AUTH}?` +
@@ -1381,7 +1340,6 @@ function generatePKCE() {
   return Array.from(arr, b => b.toString(36).padStart(2,'0')).join('').substring(0, 43);
 }
 
-// Handle OAuth callback
 window.addEventListener('message', async (e) => {
   if (e.data?.type === 'xpoz_callback' && e.data.code) {
     const verifier = sessionStorage.getItem('xpoz_verifier');
@@ -1401,8 +1359,14 @@ window.addEventListener('message', async (e) => {
       if (data.access_token) {
         xpozToken = data.access_token;
         sessionStorage.setItem('xpoz_token', xpozToken);
-        // Persist token to backend KV for server-side use
-        try { await fetch(API + '/xpoz-token', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Password': adminPassword }, body: JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token, token_type: data.token_type, expires_in: data.expires_in }) }); } catch {}
+        try {
+          const password = localStorage.getItem('citadel_password') || 'citadel2025';
+          await fetch('/api/xpoz-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+            body: JSON.stringify({ access_token: data.access_token, refresh_token: data.refresh_token, token_type: data.token_type, expires_in: data.expires_in })
+          });
+        } catch {}
         updateXpozStatus();
         showToast('Xpoz connected successfully!');
       } else {
@@ -1412,157 +1376,10 @@ window.addEventListener('message', async (e) => {
   }
 });
 
-// Call Xpoz MCP tool via HTTP
-async function xpozCall(toolName, args) {
-  if (!xpozToken) return null;
-  const id = 'req-' + Date.now();
-
-  // If no session, initialize first
-  if (!xpozSessionId) {
-    const initResp = await fetch(XPOZ_MCP, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + xpozToken },
-      body: JSON.stringify({ jsonrpc:'2.0', id:'init-'+Date.now(), method:'initialize',
-        params: { protocolVersion:'2024-11-05', capabilities:{}, clientInfo:{name:'reputation-citadel',version:'1.0'} }
-      })
-    });
-    const initHeaders = initResp.headers;
-    xpozSessionId = initHeaders.get('mcp-session-id') || null;
-    // Send initialized notification
-    await fetch(XPOZ_MCP, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + xpozToken,
-        ...(xpozSessionId ? { 'mcp-session-id': xpozSessionId } : {}) },
-      body: JSON.stringify({ jsonrpc:'2.0', method:'notifications/initialized' })
-    });
-  }
-
-  const resp = await fetch(XPOZ_MCP, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + xpozToken,
-      ...(xpozSessionId ? { 'mcp-session-id': xpozSessionId } : {}) },
-    body: JSON.stringify({ jsonrpc:'2.0', id, method:'tools/call', params: { name: toolName, arguments: args } })
-  });
-
-  const text = await resp.text();
-  // MCP can return SSE or JSON
-  if (text.startsWith('{')) {
-    const data = JSON.parse(text);
-    if (data.result?.content) {
-      return data.result.content.map(c => c.type === 'text' ? JSON.parse(c.text) : c).filter(Boolean);
-    }
-    return data.result || data;
-  }
-  // Parse SSE
-  const lines = text.split('\n').filter(l => l.startsWith('data: '));
-  for (const line of lines) {
-    try {
-      const d = JSON.parse(line.slice(6));
-      if (d.result?.content) {
-        return d.result.content.map(c => { try { return JSON.parse(c.text); } catch { return c.text; } });
-      }
-    } catch {}
-  }
-  return null;
-}
-
-// Poll async Xpoz operations (some calls return operationId)
-async function xpozPollOperation(operationId, maxWait = 30000) {
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    const result = await xpozCall('checkOperationStatus', { operationId });
-    if (result && result[0]) {
-      const data = typeof result[0] === 'object' ? result[0] : result;
-      if (data.status === 'completed' || data.results) return data;
-      if (data.status === 'failed') return null;
-    }
-    await new Promise(r => setTimeout(r, 3000));
-  }
-  return null;
-}
-
-// Collect social media data from Xpoz for a client
-async function collectXpozData(keywords, timeframeDays) {
-  const kws = keywords.split(',').map(k => k.trim()).filter(Boolean);
-  const endDate = new Date().toISOString().split('T')[0];
-  const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split('T')[0];
-  const collected = { twitter: [], reddit: [], instagram: [], metadata: { keywords: kws, startDate, endDate, timeframeDays } };
-
-  for (const kw of kws.slice(0, 3)) {
-    // Twitter search
-    try {
-      const tw = await xpozCall('getTwitterPostsByKeywords', {
-        query: kw,
-        fields: ['id','text','authorUsername','createdAtDate','retweetCount','likeCount','replyCount','quoteCount','impressionCount'],
-        startDate, endDate,
-        userPrompt: `Search Twitter for mentions of "${kw}" for reputation analysis`
-      });
-      if (tw && Array.isArray(tw)) {
-        // Fast mode returns results directly
-        const posts = tw[0]?.results || tw[0]?.data || tw;
-        if (Array.isArray(posts)) {
-          collected.twitter.push(...posts.map(p => ({
-            ...p,
-            url: p.authorUsername ? `https://x.com/${p.authorUsername}/status/${p.id}` : null,
-            keyword: kw
-          })));
-        }
-      }
-    } catch (e) { console.warn('Twitter search failed for', kw, e); }
-
-    // Reddit search
-    try {
-      const rd = await xpozCall('getRedditPostsByKeywords', {
-        query: kw,
-        fields: ['id','title','selftext','authorUsername','subredditName','createdAtDate','score','commentsCount','url','permalink'],
-        startDate, endDate,
-        userPrompt: `Search Reddit for mentions of "${kw}" for reputation analysis`
-      });
-      if (rd && Array.isArray(rd)) {
-        const posts = rd[0]?.results || rd[0]?.data || rd;
-        if (Array.isArray(posts)) {
-          collected.reddit.push(...posts.map(p => ({
-            ...p,
-            url: p.permalink ? `https://reddit.com${p.permalink}` : p.url,
-            keyword: kw
-          })));
-        }
-      }
-    } catch (e) { console.warn('Reddit search failed for', kw, e); }
-
-    // Instagram search
-    try {
-      const ig = await xpozCall('getInstagramPostsByKeywords', {
-        query: kw,
-        fields: ['id','caption','username','createdAtDate','likeCount','commentCount'],
-        startDate, endDate,
-        userPrompt: `Search Instagram for mentions of "${kw}" for reputation analysis`
-      });
-      if (ig && Array.isArray(ig)) {
-        const posts = ig[0]?.results || ig[0]?.data || ig;
-        if (Array.isArray(posts)) {
-          collected.instagram.push(...posts.map(p => ({
-            ...p,
-            url: p.codeUrl ? `https://instagram.com/p/${p.codeUrl}` : null,
-            keyword: kw
-          })));
-        }
-      }
-    } catch (e) { console.warn('Instagram search failed for', kw, e); }
-  }
-
-  collected.twitter = dedupeById(collected.twitter);
-  collected.reddit = dedupeById(collected.reddit);
-  collected.instagram = dedupeById(collected.instagram);
-  collected.summary = `Collected ${collected.twitter.length} tweets, ${collected.reddit.length} Reddit posts, ${collected.instagram.length} Instagram posts for "${keywords}" (${startDate} to ${endDate})`;
-  return collected;
-}
-
 function dedupeById(arr) {
   const seen = new Set();
   return arr.filter(x => { if (!x.id || seen.has(x.id)) return false; seen.add(x.id); return true; });
 }
-
 </script>
 </body>
 </html>
