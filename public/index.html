@@ -1240,23 +1240,27 @@ function setProgress(pct, msg) {
   document.getElementById('gen-status').textContent = msg;
 }
 
-document.getElementById('gen-type').addEventListener('change', function() {
-  const btn = document.getElementById('gen-button');
-  const hint = document.getElementById('gen-exec-hint');
-  const tfGroup = document.getElementById('gen-timeframe-group');
-  if (this.value === 'executive') {
-    btn.textContent = 'Generate All Reports';
-    hint.style.display = 'block';
-    tfGroup.style.display = 'block';
-  } else if (this.value === 'social') {
-    btn.textContent = 'Generate Report';
-    hint.style.display = 'none';
-    tfGroup.style.display = 'block';
-  } else {
-    btn.textContent = 'Generate Report';
-    hint.style.display = 'none';
-    tfGroup.style.display = 'none';
-  }
+document.addEventListener('DOMContentLoaded', function() {
+  const genTypeEl = document.getElementById('gen-type');
+  if (!genTypeEl) return;
+  genTypeEl.addEventListener('change', function() {
+    const btn = document.getElementById('gen-button');
+    const hint = document.getElementById('gen-exec-hint');
+    const tfGroup = document.getElementById('gen-timeframe-group');
+    if (this.value === 'executive') {
+      btn.textContent = 'Generate All Reports';
+      hint.style.display = 'block';
+      tfGroup.style.display = 'block';
+    } else if (this.value === 'social') {
+      btn.textContent = 'Generate Report';
+      hint.style.display = 'none';
+      tfGroup.style.display = 'block';
+    } else {
+      btn.textContent = 'Generate Report';
+      hint.style.display = 'none';
+      tfGroup.style.display = 'none';
+    }
+  });
 });
 
 function getShareUrl(report) {
