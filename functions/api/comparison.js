@@ -59,29 +59,29 @@ CRITICAL: Output ONLY complete HTML. No markdown. No commentary.`;
     html = html.trim();
     if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
 
-    // DEBUG: expose what we actually parsed
     const archiveRowCount = archiveData.split("\n").filter(l => l.trim()).length - 1;
+
     const debugInfo = {
       firstDate, lastDate,
       totalArchiveRows: archiveRowCount,
       headers: parsedHeaders,
       sampleRow,
       foundKeywords,
+      requestedDates: { dateA, dateB },
+      resolvedDates: { dateAActual, dateBActual },
       snapshotACounts: foundKeywords.map(kw => ({
         kw,
         count: snapshotA.filter(r => r.keyword === kw).length,
         negCount: snapshotA.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length,
         ownedCount: snapshotA.filter(r => r.keyword === kw && r.owned === '★').length,
-        sampleSentiments: snapshotA.filter(r => r.keyword === kw).slice(0,5).map(r => r.sentiment),
-        sampleOwned: snapshotA.filter(r => r.keyword === kw).slice(0,5).map(r => r.owned),
+        allRows: snapshotA.filter(r => r.keyword === kw).map(r => `#${r.rank} ${r.sentiment||'unlab'} ${r.owned||''} ${r.title.slice(0,30)}`),
       })),
       snapshotBCounts: foundKeywords.map(kw => ({
         kw,
         count: snapshotB.filter(r => r.keyword === kw).length,
         negCount: snapshotB.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length,
         ownedCount: snapshotB.filter(r => r.keyword === kw && r.owned === '★').length,
-        sampleSentiments: snapshotB.filter(r => r.keyword === kw).slice(0,5).map(r => r.sentiment),
-        sampleOwned: snapshotB.filter(r => r.keyword === kw).slice(0,5).map(r => r.owned),
+        allRows: snapshotB.filter(r => r.keyword === kw).map(r => `#${r.rank} ${r.sentiment||'unlab'} ${r.owned||''} ${r.title.slice(0,30)}`),
       })),
     };
 
