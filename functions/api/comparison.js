@@ -670,7 +670,8 @@ h1,h2,h3{font-family:Georgia,serif;color:var(--navy)}
 table.dt{width:100%;border-collapse:collapse}
 .dt th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--muted);padding:10px 12px;background:rgba(27,42,74,.04);border-bottom:2px solid var(--border)}
 .dt td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.88rem}
-.dt a{color:var(--navy);text-decoration:none;border-bottom:1px dotted var(--navy)}
+.dt a{color:var(--navy);text-decoration:none;border-bottom:1px dotted var(--navy);word-break:break-all}
+.dt a:hover{color:var(--navy-light);border-bottom-style:solid}
 .tg{display:inline-block;padding:3px 10px;border-radius:4px;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 .tg-gr{background:rgba(30,132,73,.12);color:var(--green)}
 .tg-rd{background:rgba(192,57,43,.12);color:var(--red)}
@@ -745,10 +746,15 @@ SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
   - div.kw-body containing:
 
     a) Since Programme Start (COMES FIRST): div.card with h3 "Since Programme Start"
-       A table showing each negative result with: Title | First seen at rank | Now at rank | Total movement
-       Colour code: green text for dropped (good), red text for risen (concern), grey italic for off page entirely.
-       One summary sentence below: "X of Y negative results have dropped since the programme began. Average movement: N positions down."
-       If no baseline data exists, say "Baseline data not yet available for this keyword."
+       A table (table.dt) with columns: Sentiment | Title | URL | First seen at | Now at | Total movement
+       - Every row gets class neg-row (red tint background) since this section only shows negative results — make it visually clear these are negatives
+       - Sentiment column: show a span.tg.tg-rd with text "Negative" on every row
+       - Title column: show the full title, truncate only if over 80 chars
+       - URL column: show the full URL as a clickable <a href="[url]" target="_blank" rel="noopener">[url]</a> — never truncate or abbreviate URLs
+       - "First seen at": e.g. "#4" in grey
+       - "Now at": e.g. "#7" in green if improved, red if worsened, grey italic "off page" if eliminated
+       - "Total movement": e.g. "+3 positions" in green (class delta-pos), "–2 positions" in red (class delta-neg), "eliminated" in bold green if off page
+       One summary sentence below the table: "X of Y negative results have dropped since the programme began. Average movement: N positions down."
 
     b) This period (Date A vs Date B): div.card with h3 showing the two dates.
        Short paragraph on what moved in just this period. 2-3 sentences.
@@ -759,10 +765,13 @@ SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">[bar-label-ext items]</div>
        Only show text inside segment if 15%+.
 
-    d) Full results table: table.dt columns: Rank | Since Start | Change (A→B) | Sentiment | Owned | Title | URL
-       - "Since Start": show "was #N" in grey, or "–" if no baseline. Colour green if rank improved since start.
+    d) Full results table: table.dt columns: Rank | Sentiment | Since Start | Change (A→B) | Owned | Title | URL
+       - Row classes: neg-row for negative (red tint), pos-row for positive (green tint), own-row for owned (gold left border), comparison-row-new, comparison-row-dropped
+       - Sentiment column: span.tg with class tg-rd (Negative), tg-gr (Positive), tg-am (Neutral), tg-gy (unlabelled)
+       - "Since Start": show "was #N" in grey, green if rank improved, red if worsened. "–" if no baseline.
        - "Change (A→B)": mv-up/mv-dn/mv-st/mv-nw/mv-dr spans
-       - Row classes: neg-row, pos-row, own-row, comparison-row-new, comparison-row-dropped
+       - Title column: full title, truncate only if over 80 chars
+       - URL column: ALWAYS a clickable hyperlink <a href="[url]" target="_blank" rel="noopener">[url]</a> — never plain text, never abbreviated
        - Sort: current results by rank, then dropped off at bottom
 
 SEC 4 — What Still Needs Work: div.sec > h2.sec-title("What Still Needs Work") + div.card
