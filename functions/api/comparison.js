@@ -300,6 +300,7 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
   const kwDates  = new Map();   // kw -> Set<dateStr>
   const allDates = new Set();
   const baselineByUrlKw = new Map(); // "url|kw" -> {rank, date, title, sentiment}
+  let allNegEverByUrlKw = new Map(); // kw -> Set<url> (any row ever labelled negative)
 
   let sampleRow = {};
   let sampleSet = false;
@@ -343,6 +344,16 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
     const existing = baselineByUrlKw.get(baseKey);
     if (!existing || ds < existing.date) {
       baselineByUrlKw.set(baseKey, { rank, date: ds, title, sentiment: sent });
+    }
+
+    // Track ANY URL ever labelled negative on ANY date (not just earliest appearance)
+    if (sent.toLowerCase() === "negative") {
+      if (!allNegEverByUrlKw) allNegEverByUrlKw = new Map();
+      if (!allNegEverByUrlKw.has(rawKw)) allNegEverByUrlKw.set(rawKw, new Set());
+      allNegEverByUrlKw.get(rawKw).add(url);
+      // Also store the title from a labelled row (more reliable than baseline which may have no label)
+      const negTitleKey = `${url}|${rawKw}|title`;
+      if (!allNegEverByUrlKw.has(negTitleKey)) allNegEverByUrlKw.set(negTitleKey, title);
     }
 
     if (!sampleSet && sent) { sampleRow = { "snapshot date": rawDate, rank: cols[iRank], sentiment: sent, owned, url, keyword: rawKw }; sampleSet = true; }
@@ -401,9 +412,9 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
   // Build: latest rank per url+kw (for "where is it now" regardless of selected dates)
   const latestByUrlKw = new Map(); // "url|kw" -> {rank, date, title, sentiment, owned}
   byKwDate.forEach((rows, kwDateKey) => {
-    const parts = kwDateKey.lastIndexOf("|");
-    const kw = kwDateKey.slice(0, parts);
-    const ds = kwDateKey.slice(parts + 1);
+    const pipeIdx = kwDateKey.lastIndexOf("|");
+    const kw = kwDateKey.slice(0, pipeIdx);
+    const ds = kwDateKey.slice(pipeIdx + 1);
     rows.forEach(r => {
       const key = `${r.url}|${kw}`;
       const existing = latestByUrlKw.get(key);
@@ -413,19 +424,7 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
     });
   });
 
-  // All negative URLs ever seen per keyword (for full baseline analysis)
-  const allNegByKw = new Map(); // kw -> Set<url>
-  baselineByUrlKw.forEach((val, key) => {
-    if ((val.sentiment || "").toLowerCase() === "negative") {
-      const pipeIdx = key.lastIndexOf("|");
-      const url = key.slice(0, pipeIdx);
-      const kw = key.slice(pipeIdx + 1);
-      if (!allNegByKw.has(kw)) allNegByKw.set(kw, new Set());
-      allNegByKw.get(kw).add(url);
-    }
-  });
-
-  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, latestByUrlKw, allNegByKw, firstDate, lastDate, parsedHeaders: rawHeaders, sampleRow };
+  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, latestByUrlKw, allNegByKw: allNegEverByUrlKw, firstDate, lastDate, parsedHeaders: rawHeaders, sampleRow };
 }
 
 function mostCommon(arr) {
@@ -581,13 +580,13 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
         const baseline = baselineByUrlKw.get(`${url}|${kw}`);
         if (!baseline) return;
 
-        // Current state: use latestByUrlKw for most up-to-date rank, regardless of selected dates
         const latestInfo = latestByUrlKw ? latestByUrlKw.get(`${url}|${kw}`) : null;
         const inSnapshotB = snapshotB.find(r => r.url === url && r.keyword === kw);
         const currentRank = latestInfo ? latestInfo.rank : (inSnapshotB ? inSnapshotB.rank : null);
         const isGone = !latestInfo && !inSnapshotB;
 
-        const title = (baseline.title || url).slice(0, 50);
+        // Use best available title — latestInfo or baseline
+        const title = ((latestInfo?.title || baseline.title || url)).slice(0, 60);
         const effectiveDelta = isGone
           ? (resultLimit + 10) - baseline.rank  // treat as pushed well past the limit
           : currentRank - baseline.rank;
