@@ -1225,7 +1225,9 @@ async function callGenerate(password, body) {
     headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
     body: JSON.stringify(body),
   });
-  const data = await resp.json();
+  const text = await resp.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`API returned ${resp.status} (not JSON) — check function is deployed`); }
   if (!resp.ok || data.error) throw new Error(data.error || `Server error ${resp.status}`);
   return data;
 }
@@ -2136,9 +2138,11 @@ async function generateComparisonReport() {
       headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
       body: JSON.stringify({ clientId, clientName: client.name, sheetUrl, keywords: selectedKws, dateA, dateB, topN }),
     });
-    const data = await resp.json();
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(`Server returned ${resp.status} — function may not be deployed. Check /api/comparison exists.`); }
     clearInterval(stepInterval);
-    if (!resp.ok || data.error) throw new Error(data.error || 'Server error');
+    if (!resp.ok || data.error) throw new Error(data.error || `Server error ${resp.status}`);
 
     if (bar) bar.style.width = '100%';
     if (status) status.textContent = 'Complete!';
