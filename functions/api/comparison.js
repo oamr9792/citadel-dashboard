@@ -464,9 +464,52 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
     out += `  Date B: Positive=${posB}/${resultLimit} (${Math.round(posB/resultLimit*100)}%) Negative=${negB}/${resultLimit} (${Math.round(negB/resultLimit*100)}%) Neutral=${neuB}/${resultLimit} (${Math.round(neuB/resultLimit*100)}%) Unlabelled=${unlB}\n`;
     out += `  Change: Positive ${posA>posB?'-':'+'+(posB-posA)} Negative ${negA>negB?'-':'+'+(negB-negA)} (positive = more negative results)\n`;
 
-    out += `\nOWNED CONTENT:\n`;
-    out += `  Date A: ${a.filter(r=>r.owned==="★").length} owned in top ${resultLimit}\n`;
-    out += `  Date B: ${b.filter(r=>r.owned==="★").length} owned in top ${resultLimit}\n`;
+    // Displacement analysis — the core ORM story
+    const negInA = a.filter(r => (r.sentiment||"").toLowerCase() === "negative");
+    const negInB = b.filter(r => (r.sentiment||"").toLowerCase() === "negative");
+    const negUrlsA = new Map(negInA.map(r => [r.url, r]));
+    const negUrlsB = new Map(negInB.map(r => [r.url, r]));
+
+    const pushed = []; // negative results that improved rank (higher number = further down)
+    const risen  = []; // negative results that got worse
+    const dropped = []; // negative results that fell off entirely
+    const newNeg = []; // new negative results that appeared
+
+    negUrlsA.forEach((rA, url) => {
+      const rB = negUrlsB.get(url);
+      if (!rB) { dropped.push({ ...rA, wasRank: rA.rank }); }
+      else {
+        const delta = rB.rank - rA.rank; // positive = moved DOWN (good for ORM)
+        if (delta > 0) pushed.push({ ...rB, delta, wasRank: rA.rank });
+        else if (delta < 0) risen.push({ ...rB, delta, wasRank: rA.rank });
+      }
+    });
+    negUrlsB.forEach((rB, url) => {
+      if (!negUrlsA.has(url)) newNeg.push(rB);
+    });
+
+    const ownedA = a.filter(r => r.owned === "★");
+    const ownedB = b.filter(r => r.owned === "★");
+    const ownedRisen = ownedB.filter(rB => {
+      const rA = a.find(r => r.url === rB.url);
+      return rA && rB.rank < rA.rank;
+    });
+
+    out += `\nDISPLACEMENT SUMMARY — ${kw}:\n`;
+    out += `  Negative results pushed DOWN (further from top): ${pushed.length}\n`;
+    pushed.forEach(r => out += `    "${r.title.slice(0,50)}" moved from #${r.wasRank} to #${r.rank} (down ${r.delta} positions)\n`);
+    out += `  Negative results that FELL OFF page entirely: ${dropped.length}\n`;
+    dropped.forEach(r => out += `    "${r.title.slice(0,50)}" was at #${r.wasRank}, now gone\n`);
+    out += `  Negative results that ROSE (closer to top — bad): ${risen.length}\n`;
+    risen.forEach(r => out += `    "${r.title.slice(0,50)}" moved from #${r.wasRank} to #${r.rank} (up ${Math.abs(r.delta)} positions)\n`);
+    out += `  New negative results that appeared: ${newNeg.length}\n`;
+    newNeg.forEach(r => out += `    "${r.title.slice(0,50)}" at #${r.rank}\n`);
+    out += `  Owned content that ROSE: ${ownedRisen.length}\n`;
+    ownedRisen.forEach(rB => {
+      const rA = a.find(r => r.url === rB.url);
+      out += `    "${rB.title.slice(0,50)}" from #${rA.rank} to #${rB.rank}\n`;
+    });
+    out += `  Owned count: ${ownedA.length} → ${ownedB.length} in top ${resultLimit}\n`;
   });
 
   return out;
@@ -585,9 +628,18 @@ table.dt{width:100%;border-collapse:collapse}
 .conf{color:var(--red);font-weight:700;text-transform:uppercase;letter-spacing:2px;font-size:.8rem;margin-top:12px}
 @media(max-width:700px){.g2,.g3,.g4{grid-template-columns:1fr}.header{flex-direction:column;text-align:center;padding:24px}}`;
 
-  return `You are an ORM analyst for Reputation Citadel. Generate a SERP Comparison Report comparing two date snapshots in HTML.
+  return `You are a senior ORM analyst for Reputation Citadel. Generate a SERP Comparison Report focused on one thing above all else: the displacement of negative results and the advancement of positive and owned content.
 
-TONE: Client-facing, professional. Use "Mr./Ms. [Last Name]" if name is a person. Positives are opportunities. Negatives are "exposure areas". Encouraging but honest. Note: dates may vary per keyword if the archive did not have data for the requested date — in that case the nearest available date was used automatically. Mention this briefly in the relevant keyword section if it applies.
+THE CORE NARRATIVE: This report exists to show progress in an ORM programme. The most important metrics are (1) negative results being pushed down or off the page, (2) positive and owned results rising, and (3) the overall sentiment balance improving. Lead every section with this story. If negative results have dropped in rank or fallen off the page — that is the headline. If owned content has risen — celebrate it. Frame everything through the lens of: is the search landscape becoming safer for this person or brand?
+
+TONE: Client-facing, confident, professional. Speak in plain language. "Negative results" not "exposure areas". "Pushed down" not "demonstrated downward movement". Be direct about wins and honest about what still needs work. If a negative result is at position 2, say so clearly and explain what that means. Never be clinical or neutral when the data shows meaningful change — if negative results dropped, that is a win worth saying so.
+
+LANGUAGE RULES:
+- Never say "it's worth noting" or "it should be noted"
+- Never use em dashes
+- Refer to negative results as "negative results", not "exposure areas" or "challenging content"
+- Refer to the programme as "the programme" not "the engagement"
+- Use plain numbers: "dropped from position 4 to position 9" not "demonstrated a downward positional shift of 5"
 
 USE THIS EXACT CSS AND STRUCTURE:
 
@@ -595,34 +647,45 @@ USE THIS EXACT CSS AND STRUCTURE:
 
 STRUCTURE:
 
-<div class="header"><img src="${LOGO}" alt="Reputation Citadel"><div class="divider"></div><div class="title"><h1>SERP Comparison Report</h1><div class="sub"><strong>[CLIENT]</strong> · [ACTUAL DATE A USED] vs [ACTUAL DATE B USED] — if dates were substituted, note that briefly</div></div></div>
+<div class="header"><img src="${LOGO}" alt="Reputation Citadel"><div class="divider"></div><div class="title"><h1>SERP Comparison Report</h1><div class="sub"><strong>[CLIENT]</strong> · [DATE A] vs [DATE B]</div></div></div>
 
 <div class="wrap">
 
-SEC 1 — Executive Summary: div.sec > h2.sec-title + div.card > p
-Summarise the overall picture: what improved, what declined, what changed in sentiment, owned content performance.
+SEC 1 — Headline Result: div.sec > h2.sec-title("What Changed") + div.card
+ONE short paragraph. Lead with the single most important thing that happened between these two dates. Was a negative result pushed off page one? Did owned content reach position 3? Did negative sentiment drop from 40% to 20%? Name it clearly and say why it matters. Then 2-3 supporting sentences on the broader picture. Do not summarise every metric — that comes later.
 
-SEC 2 — Overall Metrics (across all keywords combined): div.sec > h2.sec-title + div.g4 of div.st
-Show: Results compared per keyword (n-bl) | Positive sentiment change Δ in pp (n-gr or n-rd) | Negative sentiment change Δ in pp (n-rd or n-gr) | Owned results change Δ (n-am)
-All sentiment percentages use the fixed top-N as denominator for both dates — never use the raw count of labelled results.
+SEC 2 — Displacement Scoreboard: div.sec > h2.sec-title("Displacement Scoreboard") + div.g4 of div.st
+Four stats that tell the displacement story:
+1. Negative results pushed down or off page (count of negative URLs that improved rank or dropped off) — colour n-gr if > 0, n-rd if 0
+2. Negative sentiment change (e.g. "-3 results" or "-15pp") — n-gr if improved, n-rd if worse
+3. Positive/owned results that rose in rank — n-gr if > 0
+4. Owned results in top N (Date B count vs Date A count, e.g. "3 → 5") — n-am
+All sentiment percentages use the fixed top-N as denominator for both dates.
 Each stat: <div class="st"><div class="n [COLOR]">[VALUE]</div><div class="l">[LABEL]</div></div>
 
 SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
   - div.kw-header showing the keyword
   - div.kw-body containing:
-    a) Sentiment bar comparison: two rows showing Date A and Date B distributions. IMPORTANT — use this exact pattern for each bar:
-       - Each segment is a div.bar-s with a class (bar-pos/bar-neu/bar-neg/bar-unl) and flex value equal to the percentage (e.g. style="flex:28")
-       - Only show text inside a segment if it is 15% or wider — otherwise leave the segment empty
-       - Below each bar, show a single line of span.bar-label-ext items (one per category) showing colour dot + label + %
-       - Example: <div class="bar-c"><div class="bar-s bar-pos" style="flex:28"></div><div class="bar-s bar-neg" style="flex:17"></div><div class="bar-s bar-neu" style="flex:6"></div><div class="bar-s bar-unl" style="flex:49"></div></div>
-         then: <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"><span class="bar-label-ext"><span class="bar-dot" style="background:#1e8449"></span>Positive 28%</span><span class="bar-label-ext"><span class="bar-dot" style="background:#c0392b"></span>Negative 17%</span><span class="bar-label-ext"><span class="bar-dot" style="background:#7f8c8d"></span>Neutral 6%</span><span class="bar-label-ext"><span class="bar-dot" style="background:#ddd;color:#999"></span>Unlabelled 49%</span></div>
-    b) Full comparison table: table.dt with columns: Rank (Date B) | Change | Sentiment A→B | Owned | Title | URL
-       - Rows with class pos-row for positive, neg-row for negative, own-row for owned, comparison-row-new for new entries, comparison-row-dropped for dropped results
-       - Movement: span.mv-up for improved, span.mv-dn for declined, span.mv-st for unchanged, span.mv-nw for new, span.mv-dr for dropped
-       - Show ALL results from Date B plus dropped results at the bottom
-    c) Key changes callout: div.card summarising the 2-3 most significant movements for this keyword
 
-SEC 4 — Action Items: div.sec > h2.sec-title + ol.al > li (use "We will..." framing). 4-6 items based on what the data shows.
+    a) Displacement summary (MOST IMPORTANT — comes first): div.card with a short paragraph focused on what moved for this keyword. Lead with negative results that dropped or fell off. Then positive/owned results that rose. Be specific: name the publication and the rank change. E.g. "The New York Times article dropped from position 3 to position 7. The client's LinkedIn profile rose from position 5 to position 2."
+
+    b) Sentiment bar comparison: two rows showing Date A and Date B.
+       - Each bar: <div class="bar-c"><div class="bar-s bar-pos" style="flex:[posPC]"></div><div class="bar-s bar-neg" style="flex:[negPC]"></div><div class="bar-s bar-neu" style="flex:[neuPC]"></div><div class="bar-s bar-unl" style="flex:[unlPC]"></div></div>
+       - Only show text inside a segment if 15% or wider
+       - Below each bar: <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"> with span.bar-label-ext for each category (dot + label + %)
+       - Label each bar with span.date-badge (date-a or date-b class) before it
+
+    c) Full results table: table.dt with columns: Rank (B) | Change | Sentiment | Owned | Title | URL
+       - neg-row class for negative rows, pos-row for positive, own-row for owned (gold left border)
+       - comparison-row-new for new entries, comparison-row-dropped for results that dropped off
+       - Movement arrows: span.mv-up (green, e.g. "↑3"), span.mv-dn (red, e.g. "↓2"), span.mv-st (grey "–"), span.mv-nw (italic "New"), span.mv-dr (grey italic "Off page")
+       - Sort: current results by rank first, then dropped results at bottom greyed out
+
+SEC 4 — What Still Needs Work: div.sec > h2.sec-title("What Still Needs Work") + div.card
+Be honest and specific. Which negative results are still prominent? What rank are they at? What will it take to move them? 2-4 sentences. Do not soften this — the client needs to know what the programme is still working on.
+
+SEC 5 — Next Steps: div.sec > h2.sec-title("Next Steps") + ol style="padding-left:20px;margin-top:12px" > li style="margin-bottom:8px"
+3-5 specific actions using "We will..." framing. Tied directly to what the data shows — not generic ORM advice.
 
 </div>
 <div class="ft">Reputation Citadel · SERP Comparison Report · [DATE A] vs [DATE B]<br><div class="conf">Confidential — Prepared for Client Use Only</div></div>
