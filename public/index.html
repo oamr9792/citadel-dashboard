@@ -1403,27 +1403,7 @@ function refreshUI() {
 }
 
 async function viewReport(reportId) {
-  const report = state.reports.find(r => r.id === reportId);
-  if (report && report.shareToken) {
-    window.open('/share/' + report.shareToken, '_blank');
-  } else {
-    const password = localStorage.getItem('citadel_password') || 'citadel2025';
-    try {
-      const resp = await fetch(`/api/report-html?id=${reportId}`, {
-        headers: { 'X-Admin-Password': password },
-      });
-      if (resp.ok) {
-        const html = await resp.text();
-        const win = window.open('', '_blank');
-        win.document.write(html);
-        win.document.close();
-      } else {
-        showToast('Could not load report');
-      }
-    } catch (err) {
-      showToast('Error loading report: ' + err.message);
-    }
-  }
+  openDraftEditor(reportId);
 }
 
 async function downloadPdf(reportId, clientName) {
@@ -2041,17 +2021,6 @@ async function handleFinaliseHtml(html) {
   }
 }
 
-// Override viewReport to open draft editor for draft reports, direct view for final
-async function viewReport(reportId) {
-  const report = state.reports.find(r => r.id === reportId);
-  // Open draft editor for all reports (allows editing even after finalisation)
-  openDraftEditor(reportId);
-}
-
-function dedupeById(arr) {
-  const seen = new Set();
-  return arr.filter(x => { if (!x.id || seen.has(x.id)) return false; seen.add(x.id); return true; });
-}
 function switchGenTab(tab) {
   const isStandard = tab === 'standard';
   document.getElementById('gen-form-standard').style.display = isStandard ? 'block' : 'none';
