@@ -29,7 +29,7 @@ export async function onRequestPost(context) {
       : [];
 
     // Parse the archive CSV into snapshot rows
-    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw } =
+    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate } =
       extractSnapshots(archiveData, dateA, dateB, kwFilter, resultLimit);
 
     if (!snapshotA.length && !snapshotB.length) {
@@ -40,7 +40,7 @@ export async function onRequestPost(context) {
     // but if a keyword genuinely has no data near one date, we note it in the payload
 
     // Build prompt data
-    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit, dateAByKw, dateBByKw);
+    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate);
 
     const systemPrompt = buildComparisonSystemPrompt();
     const userPrompt = `Client: ${clientName}
@@ -354,7 +354,34 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
 
   const foundKeywords = activeKeywords.filter(kw => dateAByKw.get(kw) || dateBByKw.get(kw));
 
-  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw };
+  // ── Baseline tracker: earliest rank for EVERY URL per keyword across the FULL archive ──
+  // This answers "where did this result start?" regardless of which two dates were selected
+  const baselineByUrlKw = new Map(); // "url|kw" -> { rank, date, title }
+  const sortedDatesList = Array.from(allDates).sort();
+  const firstDate = sortedDatesList[0] || null;
+  const lastDate = sortedDatesList[sortedDatesList.length - 1] || null;
+
+  rows.forEach(r => {
+    const ds = rawToDateStr(r[dateKey] || "");
+    if (!ds) return;
+    const kw = (r[kwKey] || "").trim();
+    const url = (r[urlKey] || "").trim();
+    const rank = parseInt(r[rankKey]);
+    if (!kw || !url || isNaN(rank) || rank <= 0) return;
+
+    const key = `${url}|${kw}`;
+    const existing = baselineByUrlKw.get(key);
+    if (!existing || ds < existing.date) {
+      baselineByUrlKw.set(key, {
+        rank,
+        date: ds,
+        title: (r[titleKey] || "").trim(),
+        sentiment: (r[sentKey] || "").trim(),
+      });
+    }
+  });
+
+  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate };
 }
 
 function mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey) {
@@ -379,7 +406,7 @@ function mostCommon(arr) {
 }
 
 // ── Build comparison data payload for Claude ──────────────────────────────────
-function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20, dateAByKw = null, dateBByKw = null) {
+function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20, dateAByKw = null, dateBByKw = null, baselineByUrlKw = null, firstDate = null, lastDate = null) {
   const kwGroups = {};
   keywords.forEach(kw => {
     kwGroups[kw] = {
@@ -495,7 +522,7 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
       return rA && rB.rank < rA.rank;
     });
 
-    out += `\nDISPLACEMENT SUMMARY — ${kw}:\n`;
+    out += `\nDISPLACEMENT SUMMARY — ${kw} (${dateA} vs ${dateB}):\n`;
     out += `  Negative results pushed DOWN (further from top): ${pushed.length}\n`;
     pushed.forEach(r => out += `    "${r.title.slice(0,50)}" moved from #${r.wasRank} to #${r.rank} (down ${r.delta} positions)\n`);
     out += `  Negative results that FELL OFF page entirely: ${dropped.length}\n`;
@@ -510,6 +537,57 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
       out += `    "${rB.title.slice(0,50)}" from #${rA.rank} to #${rB.rank}\n`;
     });
     out += `  Owned count: ${ownedA.length} → ${ownedB.length} in top ${resultLimit}\n`;
+
+    // ── PROGRAMME-START BASELINE: where did each negative result START vs where is it NOW ──
+    // This answers the key question: have negative results generally dropped since we started?
+    if (baselineByUrlKw && firstDate) {
+      out += `\nPROGRAMME-START BASELINE — ${kw} (first data: ${firstDate}, latest: ${lastDate || dateB}):\n`;
+      out += `This shows where each current or recent negative result was when we FIRST saw it in the archive.\n`;
+
+      // All negative URLs seen in either snapshot
+      const allNegUrls = new Set([...negUrlsA.keys(), ...negUrlsB.keys()]);
+
+      let totalDelta = 0, countWithBaseline = 0, improved = 0, worsened = 0, unchanged = 0;
+
+      allNegUrls.forEach(url => {
+        const baseline = baselineByUrlKw ? baselineByUrlKw.get(`${url}|${kw}`) : null;
+        const currentRow = negUrlsB.get(url) || negUrlsA.get(url);
+        const currentRank = negUrlsB.has(url) ? negUrlsB.get(url).rank : null;
+        const title = (currentRow?.title || "").slice(0, 50);
+
+        if (baseline) {
+          const delta = currentRank !== null
+            ? currentRank - baseline.rank  // positive = moved down (good)
+            : resultLimit + 5 - baseline.rank; // fell off page — treat as pushed past the limit
+
+          countWithBaseline++;
+          totalDelta += delta;
+
+          const status = currentRank === null
+            ? `GONE (was #${baseline.rank} on ${baseline.date})`
+            : delta > 0
+              ? `DOWN ${delta} positions: #${baseline.rank} → #${currentRank} (started ${baseline.date})`
+              : delta < 0
+                ? `UP ${Math.abs(delta)} positions: #${baseline.rank} → #${currentRank} (started ${baseline.date}) ← CONCERN`
+                : `UNCHANGED at #${currentRank} (since ${baseline.date})`;
+
+          if (currentRank === null || delta > 0) improved++;
+          else if (delta < 0) worsened++;
+          else unchanged++;
+
+          out += `  "${title}": ${status}\n`;
+        } else {
+          out += `  "${title}": current #${currentRank || "off page"} — no baseline found (may predate archive)\n`;
+        }
+      });
+
+      if (countWithBaseline > 0) {
+        const avgDelta = (totalDelta / countWithBaseline).toFixed(1);
+        out += `  OVERALL: ${improved}/${countWithBaseline} negative results improved since programme start. `;
+        out += `Average movement: ${avgDelta > 0 ? "+" : ""}${avgDelta} positions (positive = moved down the page = good). `;
+        out += `${worsened} results moved up (concern), ${unchanged} unchanged.\n`;
+      }
+    }
   });
 
   return out;
@@ -652,40 +730,46 @@ STRUCTURE:
 <div class="wrap">
 
 SEC 1 — Headline Result: div.sec > h2.sec-title("What Changed") + div.card
-ONE short paragraph. Lead with the single most important thing that happened between these two dates. Was a negative result pushed off page one? Did owned content reach position 3? Did negative sentiment drop from 40% to 20%? Name it clearly and say why it matters. Then 2-3 supporting sentences on the broader picture. Do not summarise every metric — that comes later.
+ONE short paragraph. Lead with the single most important displacement win since the programme started — not just since Date A. If a negative result has dropped 8 positions since the programme began, say so. Then note what happened in the specific comparison period. 2-3 sentences total. Do not list metrics — that comes next.
 
 SEC 2 — Displacement Scoreboard: div.sec > h2.sec-title("Displacement Scoreboard") + div.g4 of div.st
-Four stats that tell the displacement story:
-1. Negative results pushed down or off page (count of negative URLs that improved rank or dropped off) — colour n-gr if > 0, n-rd if 0
-2. Negative sentiment change (e.g. "-3 results" or "-15pp") — n-gr if improved, n-rd if worse
-3. Positive/owned results that rose in rank — n-gr if > 0
-4. Owned results in top N (Date B count vs Date A count, e.g. "3 → 5") — n-am
-All sentiment percentages use the fixed top-N as denominator for both dates.
+Use the PROGRAMME-START BASELINE data for stats 1 and 2 — not just A vs B:
+1. Negative results displaced since programme start (pushed down or off page entirely, count) — n-gr if > 0, n-rd if 0. Label: "Negatives displaced (since start)"
+2. Average positions dropped per negative result since programme start (positive = moved further down = good) — n-gr if positive, n-rd if negative. Label: "Avg. positions dropped"
+3. Negative results still in top N today (current count) — n-rd if any remain. Label: "Negatives remaining in top [N]"
+4. Owned results today vs programme start (e.g. "2 → 4") — n-am. Label: "Owned results (start → now)"
 Each stat: <div class="st"><div class="n [COLOR]">[VALUE]</div><div class="l">[LABEL]</div></div>
 
 SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
   - div.kw-header showing the keyword
   - div.kw-body containing:
 
-    a) Displacement summary (MOST IMPORTANT — comes first): div.card with a short paragraph focused on what moved for this keyword. Lead with negative results that dropped or fell off. Then positive/owned results that rose. Be specific: name the publication and the rank change. E.g. "The New York Times article dropped from position 3 to position 7. The client's LinkedIn profile rose from position 5 to position 2."
+    a) Since Programme Start (COMES FIRST): div.card with h3 "Since Programme Start"
+       A table showing each negative result with: Title | First seen at rank | Now at rank | Total movement
+       Colour code: green text for dropped (good), red text for risen (concern), grey italic for off page entirely.
+       One summary sentence below: "X of Y negative results have dropped since the programme began. Average movement: N positions down."
+       If no baseline data exists, say "Baseline data not yet available for this keyword."
 
-    b) Sentiment bar comparison: two rows showing Date A and Date B.
-       - Each bar: <div class="bar-c"><div class="bar-s bar-pos" style="flex:[posPC]"></div><div class="bar-s bar-neg" style="flex:[negPC]"></div><div class="bar-s bar-neu" style="flex:[neuPC]"></div><div class="bar-s bar-unl" style="flex:[unlPC]"></div></div>
-       - Only show text inside a segment if 15% or wider
-       - Below each bar: <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"> with span.bar-label-ext for each category (dot + label + %)
-       - Label each bar with span.date-badge (date-a or date-b class) before it
+    b) This period (Date A vs Date B): div.card with h3 showing the two dates.
+       Short paragraph on what moved in just this period. 2-3 sentences.
 
-    c) Full results table: table.dt with columns: Rank (B) | Change | Sentiment | Owned | Title | URL
-       - neg-row class for negative rows, pos-row for positive, own-row for owned (gold left border)
-       - comparison-row-new for new entries, comparison-row-dropped for results that dropped off
-       - Movement arrows: span.mv-up (green, e.g. "↑3"), span.mv-dn (red, e.g. "↓2"), span.mv-st (grey "–"), span.mv-nw (italic "New"), span.mv-dr (grey italic "Off page")
-       - Sort: current results by rank first, then dropped results at bottom greyed out
+    c) Sentiment bars: two rows (Date A, Date B). Each:
+       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span class="date-badge [date-a/date-b]">[DATE]</span></div>
+       <div class="bar-c"><div class="bar-s bar-pos" style="flex:[pos]"></div><div class="bar-s bar-neg" style="flex:[neg]"></div><div class="bar-s bar-neu" style="flex:[neu]"></div><div class="bar-s bar-unl" style="flex:[unl]"></div></div>
+       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">[bar-label-ext items]</div>
+       Only show text inside segment if 15%+.
+
+    d) Full results table: table.dt columns: Rank | Since Start | Change (A→B) | Sentiment | Owned | Title | URL
+       - "Since Start": show "was #N" in grey, or "–" if no baseline. Colour green if rank improved since start.
+       - "Change (A→B)": mv-up/mv-dn/mv-st/mv-nw/mv-dr spans
+       - Row classes: neg-row, pos-row, own-row, comparison-row-new, comparison-row-dropped
+       - Sort: current results by rank, then dropped off at bottom
 
 SEC 4 — What Still Needs Work: div.sec > h2.sec-title("What Still Needs Work") + div.card
-Be honest and specific. Which negative results are still prominent? What rank are they at? What will it take to move them? 2-4 sentences. Do not soften this — the client needs to know what the programme is still working on.
+Name the specific negative results still prominent. State their current rank and how long they have been in the results. What will it take to move them. Be direct.
 
 SEC 5 — Next Steps: div.sec > h2.sec-title("Next Steps") + ol style="padding-left:20px;margin-top:12px" > li style="margin-bottom:8px"
-3-5 specific actions using "We will..." framing. Tied directly to what the data shows — not generic ORM advice.
+3-5 specific actions using "We will..." framing, tied to what the data actually shows.
 
 </div>
 <div class="ft">Reputation Citadel · SERP Comparison Report · [DATE A] vs [DATE B]<br><div class="conf">Confidential — Prepared for Client Use Only</div></div>
