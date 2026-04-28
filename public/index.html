@@ -1511,10 +1511,13 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('active'), 3000);
 }
 
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.classList.remove('active');
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.classList.remove('active');
+    });
   });
+  updateXpozStatus();
 });
 
 // ══════════════════════════════════════════
@@ -1528,8 +1531,6 @@ const XPOZ_AUTH = 'https://mcp.xpoz.ai/oauth/authorize';
 const XPOZ_TOKEN = 'https://mcp.xpoz.ai/oauth/token';
 let xpozToken = sessionStorage.getItem('xpoz_token') || null;
 let xpozSessionId = null;
-
-updateXpozStatus();
 
 function updateXpozStatus() {
   const el = document.getElementById('xpoz-status');
