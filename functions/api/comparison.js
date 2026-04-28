@@ -481,15 +481,14 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
       out += `  ${rankStr}${sentChange}${ownedChange} | ${d.title.slice(0, 50)} | ${d.url}\n`;
     });
 
-    // Sentiment — use resultLimit as fixed denominator so percentages are comparable
+    // Sentiment — secondary metric, use resultLimit as fixed denominator
     const countSent = (arr, val) => arr.filter(r => (r.sentiment || "").toLowerCase() === val.toLowerCase()).length;
     const posA = countSent(a, "Positive"), negA = countSent(a, "Negative"), neuA = countSent(a, "Neutral"), unlA = a.filter(r => !r.sentiment).length;
     const posB = countSent(b, "Positive"), negB = countSent(b, "Negative"), neuB = countSent(b, "Neutral"), unlB = b.filter(r => !r.sentiment).length;
 
-    out += `\nSENTIMENT SUMMARY (denominator = ${resultLimit} for both dates):\n`;
-    out += `  Date A: Positive=${posA}/${resultLimit} (${Math.round(posA/resultLimit*100)}%) Negative=${negA}/${resultLimit} (${Math.round(negA/resultLimit*100)}%) Neutral=${neuA}/${resultLimit} (${Math.round(neuA/resultLimit*100)}%) Unlabelled=${unlA}\n`;
-    out += `  Date B: Positive=${posB}/${resultLimit} (${Math.round(posB/resultLimit*100)}%) Negative=${negB}/${resultLimit} (${Math.round(negB/resultLimit*100)}%) Neutral=${neuB}/${resultLimit} (${Math.round(neuB/resultLimit*100)}%) Unlabelled=${unlB}\n`;
-    out += `  Change: Positive ${posA>posB?'-':'+'+(posB-posA)} Negative ${negA>negB?'-':'+'+(negB-negA)} (positive = more negative results)\n`;
+    out += `\nSENTIMENT (secondary — denominator = ${resultLimit}):\n`;
+    out += `  Date A: Pos=${posA} (${Math.round(posA/resultLimit*100)}%) Neg=${negA} (${Math.round(negA/resultLimit*100)}%) Neu=${neuA} (${Math.round(neuA/resultLimit*100)}%) Unl=${unlA}\n`;
+    out += `  Date B: Pos=${posB} (${Math.round(posB/resultLimit*100)}%) Neg=${negB} (${Math.round(negB/resultLimit*100)}%) Neu=${neuB} (${Math.round(neuB/resultLimit*100)}%) Unl=${unlB}\n`;
 
     // Displacement analysis — the core ORM story
     const negInA = a.filter(r => (r.sentiment||"").toLowerCase() === "negative");
@@ -583,11 +582,22 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
 
       if (countWithBaseline > 0) {
         const avgDelta = (totalDelta / countWithBaseline).toFixed(1);
+        // avgDelta positive = moved down (good). Show as plain positive number.
+        const avgDisplay = Math.abs(parseFloat(avgDelta)).toFixed(1);
         out += `  OVERALL: ${improved}/${countWithBaseline} negative results improved since programme start. `;
-        out += `Average movement: ${avgDelta > 0 ? "+" : ""}${avgDelta} positions (positive = moved down the page = good). `;
+        out += `Average movement: ${avgDisplay} positions down (plain number, no + sign). `;
         out += `${worsened} results moved up (concern), ${unchanged} unchanged.\n`;
       }
     }
+
+    // Owned narrative percentages — replaces sentiment % as primary metric
+    const ownedPctA = Math.round((ownedA.length / resultLimit) * 100);
+    const ownedPctB = Math.round((ownedB.length / resultLimit) * 100);
+    out += `\nOWNED NARRATIVE — ${kw} (denominator = ${resultLimit}):\n`;
+    out += `  Date A: ${ownedA.length} owned results = ${ownedPctA}% of top ${resultLimit}\n`;
+    out += `  Date B: ${ownedB.length} owned results = ${ownedPctB}% of top ${resultLimit}\n`;
+    out += `  Change: ${ownedB.length - ownedA.length >= 0 ? '+' : ''}${ownedB.length - ownedA.length} owned results (${ownedPctB - ownedPctA >= 0 ? '+' : ''}${ownedPctB - ownedPctA}pp)\n`;
+    out += `  Secondary (for compact display only): Pos A=${posA} Neg A=${negA} Neu A=${neuA} / Pos B=${posB} Neg B=${negB} Neu B=${neuB}\n`;
   });
 
   return out;
@@ -679,9 +689,11 @@ table.dt{width:100%;border-collapse:collapse}
 .tg-bl{background:rgba(27,42,74,.12);color:var(--navy)}
 .tg-gd{background:rgba(184,134,11,.12);color:var(--owned-gold)}
 .tg-gy{background:#e8e8e8;color:#666}
-.own-row{border-left:3px solid var(--owned-gold);background:#fdf8ef}
+.own-row{border-left:4px solid var(--owned-gold)}
 .neg-row{background:rgba(192,57,43,.05)}
 .pos-row{background:rgba(30,132,73,.05)}
+.own-row.pos-row{background:rgba(30,132,73,.05)}
+.own-row.neg-row{background:rgba(192,57,43,.05)}
 .mv-up{color:var(--green);font-weight:700}
 .mv-dn{color:var(--red);font-weight:700}
 .mv-st{color:var(--muted)}
@@ -736,7 +748,7 @@ ONE short paragraph. Lead with the single most important displacement win since 
 SEC 2 — Displacement Scoreboard: div.sec > h2.sec-title("Displacement Scoreboard") + div.g4 of div.st
 Use the PROGRAMME-START BASELINE data for stats 1 and 2 — not just A vs B:
 1. Negative results displaced since programme start (pushed down or off page entirely, count) — n-gr if > 0, n-rd if 0. Label: "Negatives displaced (since start)"
-2. Average positions dropped per negative result since programme start (positive = moved further down = good) — n-gr if positive, n-rd if negative. Label: "Avg. positions dropped"
+2. Average positions dropped per negative result since programme start — show as a plain number e.g. "3.3" with no + sign (dropping is always good here, the label explains direction). n-gr always. Label: "Avg. positions dropped"
 3. Negative results still in top N today (current count) — n-rd if any remain. Label: "Negatives remaining in top [N]"
 4. Owned results today vs programme start (e.g. "2 → 4") — n-am. Label: "Owned results (start → now)"
 Each stat: <div class="st"><div class="n [COLOR]">[VALUE]</div><div class="l">[LABEL]</div></div>
@@ -747,32 +759,35 @@ SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
 
     a) Since Programme Start (COMES FIRST): div.card with h3 "Since Programme Start"
        A table (table.dt) with columns: Sentiment | Title | URL | First seen at | Now at | Total movement
-       - Every row gets class neg-row (red tint background) since this section only shows negative results — make it visually clear these are negatives
-       - Sentiment column: show a span.tg.tg-rd with text "Negative" on every row
-       - Title column: show the full title, truncate only if over 80 chars
-       - URL column: show the full URL as a clickable <a href="[url]" target="_blank" rel="noopener">[url]</a> — never truncate or abbreviate URLs
+       - Every row gets class neg-row since this section only shows negative results
+       - Sentiment column: span.tg.tg-rd "Negative" on every row
+       - Title: full title, truncate only if over 80 chars
+       - URL: always <a href="[url]" target="_blank" rel="noopener">[url]</a> — never plain text
        - "First seen at": e.g. "#4" in grey
-       - "Now at": e.g. "#7" in green if improved, red if worsened, grey italic "off page" if eliminated
-       - "Total movement": e.g. "+3 positions" in green (class delta-pos), "–2 positions" in red (class delta-neg), "eliminated" in bold green if off page
-       One summary sentence below the table: "X of Y negative results have dropped since the programme began. Average movement: N positions down."
+       - "Now at": green if rank number is higher (dropped = good), red if rank number is lower (risen = bad), grey italic "off page" if eliminated
+       - "Total movement": for NEGATIVE results, dropping is GOOD — use class delta-pos (green) for dropped, delta-neg (red) for risen. Show "eliminated" in bold green if off page.
+       One summary sentence below: "X of Y negative results have dropped since the programme began. Average movement: N positions down."
 
     b) This period (Date A vs Date B): div.card with h3 showing the two dates.
        Short paragraph on what moved in just this period. 2-3 sentences.
 
-    c) Sentiment bars: two rows (Date A, Date B). Each:
-       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span class="date-badge [date-a/date-b]">[DATE]</span></div>
-       <div class="bar-c"><div class="bar-s bar-pos" style="flex:[pos]"></div><div class="bar-s bar-neg" style="flex:[neg]"></div><div class="bar-s bar-neu" style="flex:[neu]"></div><div class="bar-s bar-unl" style="flex:[unl]"></div></div>
-       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">[bar-label-ext items]</div>
-       Only show text inside segment if 15%+.
+    c) Owned Narrative: two rows showing Date A and Date B owned content counts.
+       Show: "Owned results: X of [N] ([Y]%)" for each date, with a simple bar showing owned (gold) vs not-owned (grey).
+       <div style="margin:8px 0"><span class="date-badge date-a">[DATE A]</span> <strong>X owned</strong> of [N] results ([Y]%)</div>
+       <div style="background:#e8e8e8;height:16px;border-radius:4px;overflow:hidden;margin:4px 0"><div style="height:100%;background:var(--owned-gold);width:[Y]%"></div></div>
+       Repeat for Date B with date-b badge. This replaces the sentiment percentage bar as the primary metric.
+       Below, add the sentiment distribution as a compact secondary note: "Sentiment: X pos / Y neg / Z neu"
 
     d) Full results table: table.dt columns: Rank | Sentiment | Since Start | Change (A→B) | Owned | Title | URL
-       - Row classes: neg-row for negative (red tint), pos-row for positive (green tint), own-row for owned (gold left border), comparison-row-new, comparison-row-dropped
-       - Sentiment column: span.tg with class tg-rd (Negative), tg-gr (Positive), tg-am (Neutral), tg-gy (unlabelled)
-       - "Since Start": show "was #N" in grey, green if rank improved, red if worsened. "–" if no baseline.
-       - "Change (A→B)": mv-up/mv-dn/mv-st/mv-nw/mv-dr spans
-       - Title column: full title, truncate only if over 80 chars
-       - URL column: ALWAYS a clickable hyperlink <a href="[url]" target="_blank" rel="noopener">[url]</a> — never plain text, never abbreviated
-       - Sort: current results by rank, then dropped off at bottom
+       CRITICAL COLOUR RULE — movement colours are CONTEXT-AWARE:
+       - For NEGATIVE rows: dropping in rank = GOOD = use span.mv-up (green) even though rank number went up. Rising in rank = BAD = use span.mv-dn (red).
+       - For POSITIVE/NEUTRAL rows: dropping in rank = BAD = use span.mv-dn (red). Rising = GOOD = use span.mv-up (green).
+       - "new" = span.mv-nw (navy italic), "off page" = span.mv-dr (grey italic)
+       - Row classes: neg-row for negative, pos-row for positive, own-row ADDED to whatever sentiment class applies (not instead of it) — e.g. class="pos-row own-row"
+       - Sentiment: span.tg with tg-rd/tg-gr/tg-am/tg-gy
+       - "Since Start": "was #N" grey for no change, green text if improved since start, red if worsened
+       - URL: always <a href="[url]" target="_blank" rel="noopener">[url]</a>
+       - Sort: current results by rank, dropped off at bottom greyed out
 
 SEC 4 — What Still Needs Work: div.sec > h2.sec-title("What Still Needs Work") + div.card
 Name the specific negative results still prominent. State their current rank and how long they have been in the results. What will it take to move them. Be direct.
