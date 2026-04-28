@@ -29,8 +29,17 @@ export async function onRequestPost(context) {
       : [];
 
     // Parse the archive CSV into snapshot rows
-    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate } =
-      extractSnapshots(archiveData, dateA, dateB, kwFilter, resultLimit);
+    // Cap archive CSV to last 50,000 lines to prevent timeout on large sheets
+    const archiveLines = archiveData.split("\n");
+    const headerLine = archiveLines[0];
+    const dataLines = archiveLines.slice(1).filter(l => l.trim());
+    // Keep all rows but warn if very large
+    const cappedCsv = dataLines.length > 10000
+      ? headerLine + "\n" + dataLines.slice(-10000).join("\n")
+      : archiveData;
+
+    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders, sampleRow } =
+      extractSnapshots(cappedCsv, dateA, dateB, kwFilter, resultLimit);
 
     if (!snapshotA.length && !snapshotB.length) {
       return json({ error: `No data found near ${dateA} or ${dateB} in the archive. Check the sheet has data and try different dates.` }, 400);
@@ -58,16 +67,30 @@ CRITICAL: Output ONLY complete HTML. No markdown. No commentary.`;
     html = html.trim();
     if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
 
-    // DEBUG: include sample of what we actually parsed — helps diagnose sentiment/owned issues
+    // DEBUG: expose what we actually parsed
     const debugInfo = {
-      firstDate,
-      lastDate,
-      totalRows: (() => { const { rows } = parseCSV(archiveData); return rows.length; })(),
-      headers: (() => { const { headers } = parseCSV(archiveData); return headers; })(),
-      sampleRow: (() => { const { rows } = parseCSV(archiveData); return rows[0] || {}; })(),
+      firstDate, lastDate,
+      totalArchiveRows: dataLines.length,
+      cappedTo: Math.min(dataLines.length, 10000),
+      headers: parsedHeaders,
+      sampleRow,
       foundKeywords,
-      snapshotACounts: foundKeywords.map(kw => ({ kw, count: snapshotA.filter(r => r.keyword === kw).length, negCount: snapshotA.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length, ownedCount: snapshotA.filter(r => r.keyword === kw && r.owned === '★').length })),
-      snapshotBCounts: foundKeywords.map(kw => ({ kw, count: snapshotB.filter(r => r.keyword === kw).length, negCount: snapshotB.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length, ownedCount: snapshotB.filter(r => r.keyword === kw && r.owned === '★').length })),
+      snapshotACounts: foundKeywords.map(kw => ({
+        kw,
+        count: snapshotA.filter(r => r.keyword === kw).length,
+        negCount: snapshotA.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length,
+        ownedCount: snapshotA.filter(r => r.keyword === kw && r.owned === '★').length,
+        sampleSentiments: snapshotA.filter(r => r.keyword === kw).slice(0,5).map(r => r.sentiment),
+        sampleOwned: snapshotA.filter(r => r.keyword === kw).slice(0,5).map(r => r.owned),
+      })),
+      snapshotBCounts: foundKeywords.map(kw => ({
+        kw,
+        count: snapshotB.filter(r => r.keyword === kw).length,
+        negCount: snapshotB.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length,
+        ownedCount: snapshotB.filter(r => r.keyword === kw && r.owned === '★').length,
+        sampleSentiments: snapshotB.filter(r => r.keyword === kw).slice(0,5).map(r => r.sentiment),
+        sampleOwned: snapshotB.filter(r => r.keyword === kw).slice(0,5).map(r => r.owned),
+      })),
     };
 
     const shareToken = genTok();
@@ -393,7 +416,7 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
     }
   });
 
-  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate };
+  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders: Object.keys(rows[0] || {}), sampleRow: rows[0] || {} };
 }
 
 function mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey) {
