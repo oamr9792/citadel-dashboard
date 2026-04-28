@@ -1594,16 +1594,15 @@ function switchGenTab(tab) {
 async function generateComparisonReport() {
   const clientId = document.getElementById('comp-client').value;
   const sheetUrl = document.getElementById('comp-sheet').value;
-  const keywords = document.getElementById('comp-keywords').value;
   const dateA = document.getElementById('comp-date-a').value;
   const dateB = document.getElementById('comp-date-b').value;
 
   if (!clientId) { showToast('Please select a client'); return; }
   if (!sheetUrl) { showToast('Please enter a Google Sheet URL'); return; }
-  if (!dateA || !dateB) { showToast('Please select both dates'); return; }
+  if (!dateA || !dateB) { showToast('Please load dates from the sheet and select both dates'); return; }
   if (dateA >= dateB) { showToast('Date A must be before Date B'); return; }
 
-  // Get selected keywords from multiselect
+  // Get selected keywords from multiselect (empty = all)
   const kwSelect = document.getElementById('comp-keywords-select');
   const selectedKws = kwSelect ? Array.from(kwSelect.selectedOptions).map(o => o.value).join(', ') : '';
 
