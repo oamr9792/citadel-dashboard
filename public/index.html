@@ -1119,18 +1119,28 @@ function generateToken() {
 // REPORTS
 // ══════════════════════════════════════════
 async function generateReport() {
+  // Immediate visual feedback
+  const genBtn = document.getElementById('gen-button');
+  const genProg = document.getElementById('gen-progress');
+  const genBar = document.getElementById('gen-progress-bar');
+  const genStatus = document.getElementById('gen-status');
+  if (genBtn) { genBtn.disabled = true; genBtn.textContent = 'Working...'; }
+  if (genProg) genProg.style.display = 'block';
+  if (genBar) genBar.style.width = '5%';
+  if (genStatus) genStatus.textContent = 'Checking inputs...';
+
   const clientId = document.getElementById('gen-client').value;
   const type = document.getElementById('gen-type').value;
   const sheet = document.getElementById('gen-sheet').value;
   const keywords = document.getElementById('gen-keywords').value;
 
-  if (!clientId) { showToast('Please select a client'); return; }
+  if (!clientId) { showToast('Please select a client'); resetGenUI(); return; }
 
   const client = state.clients.find(c => c.id === clientId);
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
 
-  document.getElementById('gen-progress').style.display = 'block';
-  document.getElementById('gen-button').disabled = true;
+  if (genBar) genBar.style.width = '10%';
+  if (genStatus) genStatus.textContent = 'Starting...';
 
   const kw = keywords || client.keywords.join(', ');
   const sheetUrl = sheet || client.sheetUrl;
@@ -2069,17 +2079,32 @@ function switchGenTab(tab) {
 
 // ── COMPARISON REPORT ────────────────────────────────────────────
 async function generateComparisonReport() {
+  // Give immediate visual feedback — disable button and show spinner right away
+  const btn = document.getElementById('comp-button');
+  const prog = document.getElementById('comp-progress');
+  const bar = document.getElementById('comp-progress-bar');
+  const status = document.getElementById('comp-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Working...'; }
+  if (prog) prog.style.display = 'block';
+  if (bar) bar.style.width = '5%';
+  if (status) status.textContent = 'Checking inputs...';
+
+  const resetComp = () => {
+    if (btn) { btn.disabled = false; btn.textContent = 'Generate Comparison'; }
+    if (prog) prog.style.display = 'none';
+    if (bar) bar.style.width = '0%';
+  };
+
   const clientId = document.getElementById('comp-client').value;
   const sheetUrl = document.getElementById('comp-sheet').value;
   const dateA = document.getElementById('comp-date-a').value;
   const dateB = document.getElementById('comp-date-b').value;
 
-  if (!clientId) { showToast('Please select a client'); return; }
-  if (!sheetUrl) { showToast('Please enter a Google Sheet URL'); return; }
-  if (!dateA || !dateB) { showToast('Please load dates from the sheet and select both dates'); return; }
-  if (dateA >= dateB) { showToast('Date A must be before Date B'); return; }
+  if (!clientId) { showToast('Please select a client'); resetComp(); return; }
+  if (!sheetUrl) { showToast('Please enter a Google Sheet URL'); resetComp(); return; }
+  if (!dateA || !dateB) { showToast('Please load dates from the sheet and select both dates'); resetComp(); return; }
+  if (dateA >= dateB) { showToast('Date A must be before Date B'); resetComp(); return; }
 
-  // Get selected keywords from multiselect (empty = all)
   const kwSelect = document.getElementById('comp-keywords-select');
   const selectedKws = kwSelect ? Array.from(kwSelect.selectedOptions).map(o => o.value).join(', ') : '';
 
@@ -2087,14 +2112,14 @@ async function generateComparisonReport() {
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
   const topN = parseInt(document.getElementById('comp-top-n')?.value || '20');
 
-  document.getElementById('comp-progress').style.display = 'block';
-  document.getElementById('comp-button').disabled = true;
+  if (bar) bar.style.width = '15%';
+  if (status) status.textContent = 'Fetching SERP archive from Google Sheet...';
 
   const steps = [
-    [20, 'Fetching SERP archive from Google Sheet...'],
-    [50, 'Comparing snapshots...'],
+    [30, 'Fetching SERP archive from Google Sheet...'],
+    [55, 'Comparing snapshots...'],
     [75, 'Generating comparison report...'],
-    [95, 'Finalising...'],
+    [92, 'Finalising...'],
   ];
   let stepIdx = 0;
   const stepInterval = setInterval(() => {
@@ -2115,14 +2140,12 @@ async function generateComparisonReport() {
     clearInterval(stepInterval);
     if (!resp.ok || data.error) throw new Error(data.error || 'Server error');
 
-    document.getElementById('comp-progress-bar').style.width = '100%';
-    document.getElementById('comp-status').textContent = 'Complete!';
+    if (bar) bar.style.width = '100%';
+    if (status) status.textContent = 'Complete!';
     if (data.report) { state.reports.unshift(data.report); saveState(); }
 
     setTimeout(() => {
-      document.getElementById('comp-progress').style.display = 'none';
-      document.getElementById('comp-button').disabled = false;
-      document.getElementById('comp-progress-bar').style.width = '0%';
+      resetComp();
       showToast('Comparison report generated for ' + client.name);
       refreshUI();
       navigateTo('reports');
@@ -2130,8 +2153,7 @@ async function generateComparisonReport() {
 
   } catch (err) {
     clearInterval(stepInterval);
-    document.getElementById('comp-progress').style.display = 'none';
-    document.getElementById('comp-button').disabled = false;
+    resetComp();
     showToast('Error: ' + err.message);
   }
 }
