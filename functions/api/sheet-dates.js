@@ -26,15 +26,26 @@ export async function onRequestPost(context) {
     const dateSet = new Set();
     const kwSet = new Set();
 
+    function rawToDateStr(raw) {
+      if (!raw) return null;
+      raw = raw.trim();
+      let m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+      m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      return null;
+    }
+
     for (let i = 1; i < lines.length; i++) {
       if (!lines[i].trim()) continue;
       const cols = parseCSVLine(lines[i]);
       const rawDate = (cols[snapIdx] || "").trim();
       if (!rawDate) continue;
-      const d = new Date(rawDate);
-      if (isNaN(d.getTime())) continue;
-      // Store as ISO date string YYYY-MM-DD for comparison, but keep original for display
-      dateSet.add(d.toISOString().slice(0, 10));
+      const ds = rawToDateStr(rawDate);
+      if (!ds) continue;
+      dateSet.add(ds);
       if (kwIdx >= 0) {
         const kw = (cols[kwIdx] || "").trim();
         if (kw) kwSet.add(kw);
