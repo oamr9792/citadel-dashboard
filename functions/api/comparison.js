@@ -90,7 +90,19 @@ async function fetchArchiveTab(sheetUrl) {
   if (!m) return null;
   const id = m[1];
 
-  // Step 1: try to get sheet metadata via the feeds API to find SERP_Archive gid
+  // Step 1: try the known SERP_Archive gid (697017722) first — most common
+  const knownGids = ["697017722"];
+  for (const gid of knownGids) {
+    const csv = await fetchCsvByGid(id, gid);
+    if (csv) {
+      const firstLine = csv.split("\n")[0].toLowerCase();
+      if (firstLine.includes("snapshot") || (firstLine.includes("rank") && firstLine.includes("url"))) {
+        return csv;
+      }
+    }
+  }
+
+  // Step 2: try the feeds API to find the archive tab by name
   try {
     const feedUrl = `https://spreadsheets.google.com/feeds/worksheets/${id}/public/basic?alt=json`;
     const feedResp = await fetch(feedUrl, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
@@ -99,48 +111,49 @@ async function fetchArchiveTab(sheetUrl) {
       const entries = feedData?.feed?.entry || [];
       for (const entry of entries) {
         const title = (entry?.title?.$t || "").toLowerCase();
-        // Look for SERP_Archive tab
         if (title.includes("archive")) {
-          // Extract gid from the self link
           const selfLink = entry?.link?.find(l => l.rel === "self")?.href || "";
           const gidMatch = selfLink.match(/\/(\d+)$/);
           if (gidMatch) {
-            const gid = gidMatch[1];
-            const csv = await fetchCsvByGid(id, gid);
+            const csv = await fetchCsvByGid(id, gidMatch[1]);
             if (csv) return csv;
           }
         }
       }
-      // If no archive tab found via name, try all tabs and check headers
+      // Try all tabs, pick the one with "snapshot" in header or most rows
+      const candidates = [];
       for (const entry of entries) {
         const selfLink = entry?.link?.find(l => l.rel === "self")?.href || "";
         const gidMatch = selfLink.match(/\/(\d+)$/);
         if (!gidMatch) continue;
-        const gid = gidMatch[1];
-        const csv = await fetchCsvByGid(id, gid);
+        const csv = await fetchCsvByGid(id, gidMatch[1]);
         if (!csv) continue;
         const firstLine = csv.split("\n")[0].toLowerCase();
-        if (firstLine.includes("snapshot") || (firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword") && csv.split("\n").length > 5)) {
-          return csv;
+        const rowCount = csv.split("\n").length;
+        if (firstLine.includes("snapshot")) return csv;
+        if (firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword") && rowCount > 5) {
+          candidates.push({ csv, rowCount });
         }
+      }
+      if (candidates.length) {
+        candidates.sort((a, b) => b.rowCount - a.rowCount);
+        return candidates[0].csv;
       }
     }
   } catch {}
 
-  // Step 2: try gids 0–20 directly (brute force)
-  const candidates = []; // {csv, hasSnapshot, hasRankUrlKw, rowCount}
-  for (let gid = 0; gid <= 20; gid++) {
+  // Step 3: brute force gids 0-30 using export format
+  const candidates = [];
+  for (let gid = 0; gid <= 30; gid++) {
     const csv = await fetchCsvByGid(id, String(gid));
     if (!csv) continue;
     const firstLine = csv.split("\n")[0].toLowerCase();
     const rowCount = csv.split("\n").length;
-    const hasSnapshot = firstLine.includes("snapshot");
-    const hasRankUrlKw = firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword");
-    if (hasSnapshot) return csv; // best match — return immediately
-    if (hasRankUrlKw && rowCount > 3) candidates.push({ csv, rowCount });
+    if (firstLine.includes("snapshot")) return csv;
+    if (firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword") && rowCount > 5) {
+      candidates.push({ csv, rowCount });
+    }
   }
-
-  // Step 3: return the candidate with the most rows (most likely the archive)
   if (candidates.length) {
     candidates.sort((a, b) => b.rowCount - a.rowCount);
     return candidates[0].csv;
@@ -150,9 +163,10 @@ async function fetchArchiveTab(sheetUrl) {
 }
 
 async function fetchCsvByGid(sheetId, gid) {
+  // The export format is more reliable than gviz/tq for specific gids
   const urls = [
+    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&id=${sheetId}&gid=${gid}`,
     `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
-    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
   ];
   for (const url of urls) {
     try {
@@ -161,7 +175,6 @@ async function fetchCsvByGid(sheetId, gid) {
       const csv = await r.text();
       if (!csv || csv.length < 30) continue;
       if (csv.includes("<!DOCTYPE") || csv.includes("<html")) continue;
-      // Must have at least a header row with some content
       const firstLine = csv.split("\n")[0];
       if (firstLine.split(",").length < 3) continue;
       return csv;
