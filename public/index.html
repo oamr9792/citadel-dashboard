@@ -1683,7 +1683,6 @@ async function openDraftEditor(reportId) {
 }
 
 function loadHtmlIntoIframe(html) {
-  const iframe = document.getElementById('draft-iframe');
   // Inject editor bridge script into the HTML before loading
   const bridgeScript = '<scr' + 'ipt>\n' + `
     (function() {
