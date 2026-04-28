@@ -29,22 +29,26 @@ export async function onRequestPost(context) {
       : [];
 
     // Parse the archive CSV into snapshot rows
-    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual } =
+    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw } =
       extractSnapshots(archiveData, dateA, dateB, kwFilter, resultLimit);
 
     if (!snapshotA.length && !snapshotB.length) {
-      return json({ error: `No data found for the selected dates. Check that ${dateA} and ${dateB} exist in the archive.` }, 400);
+      return json({ error: `No data found near ${dateA} or ${dateB} in the archive. Check the sheet has data and try different dates.` }, 400);
     }
 
+    // If one snapshot is empty, warn but continue — the nearest-date fallback should have resolved this
+    // but if a keyword genuinely has no data near one date, we note it in the payload
+
     // Build prompt data
-    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit);
+    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit, dateAByKw, dateBByKw);
 
     const systemPrompt = buildComparisonSystemPrompt();
     const userPrompt = `Client: ${clientName}
 Keywords analysed: ${foundKeywords.join(", ")}
-Date A (baseline): ${dateAActual || dateA}
-Date B (latest): ${dateBActual || dateB}
+Date A (requested): ${dateA} → resolved to nearest available: ${dateAActual}
+Date B (requested): ${dateB} → resolved to nearest available: ${dateBActual}
 Results compared: Top ${resultLimit} per keyword
+Note: dates shown are the actual snapshot dates used. If a requested date had no data, the nearest available date was substituted automatically.
 
 ${dataPayload}
 
@@ -264,67 +268,118 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
   const dispKey = Object.keys(sampleRow).find(k => k.includes("display")) || "display url";
   const descKey = Object.keys(sampleRow).find(k => k.includes("meta") || k.includes("description") || k.includes("snippet")) || "meta description";
 
-  // Collect all available date strings (YYYY-MM-DD) from the archive
+  // Index all rows by (keyword, date) for fast lookup
+  // Also track which dates have data for each keyword
+  const byKwDate = new Map(); // "kw|date" -> rows[]
+  const kwDates = new Map();  // keyword -> Set<dateStr>
   const allDates = new Set();
+
   rows.forEach(r => {
     const ds = rawToDateStr(r[dateKey] || "");
-    if (ds) allDates.add(ds);
+    if (!ds) return;
+    allDates.add(ds);
+    const kw = (r[kwKey] || "").trim();
+    if (!kw) return;
+    const key = `${kw}|${ds}`;
+    if (!byKwDate.has(key)) byKwDate.set(key, []);
+    byKwDate.get(key).push(r);
+    if (!kwDates.has(kw)) kwDates.set(kw, new Set());
+    kwDates.get(kw).add(ds);
   });
 
-  // Find closest available date to the requested date
-  const findClosest = (target) => {
+  const sortedDates = Array.from(allDates).sort();
+
+  // Find closest date to target that has data for a specific keyword.
+  // Falls back to global allDates if keyword has no data near target.
+  const findClosestForKw = (target, kw) => {
     if (!target) return null;
-    // Exact match first
-    if (allDates.has(target)) return target;
-    // Find nearest
+
+    // Try keyword-specific dates first
+    const available = kwDates.get(kw);
+    const searchSet = (available && available.size) ? available : allDates;
+    if (!searchSet.size) return null;
+
+    // Exact match
+    if (searchSet.has(target)) return target;
+
+    // Find nearest available date
     const targetTs = new Date(target).getTime();
-    if (isNaN(targetTs)) return null;
+    if (isNaN(targetTs)) return Array.from(searchSet).sort()[0];
+
     let closest = null, closestDiff = Infinity;
-    allDates.forEach(ds => {
+    searchSet.forEach(ds => {
       const diff = Math.abs(new Date(ds).getTime() - targetTs);
       if (diff < closestDiff) { closestDiff = diff; closest = ds; }
     });
     return closest;
   };
 
-  const dateAActual = findClosest(dateA);
-  const dateBActual = findClosest(dateB);
+  // Determine which keywords we're working with
+  const allKeywords = Array.from(kwDates.keys());
+  const activeKeywords = kwFilter.length
+    ? allKeywords.filter(kw => kwFilter.some(f => kw.toLowerCase().includes(f)))
+    : allKeywords;
 
-  // Filter rows by date using the same timezone-safe parser
-  const filterRows = (dateStr) => {
-    if (!dateStr) return [];
-    let filtered = rows.filter(r => rawToDateStr(r[dateKey] || "") === dateStr);
-    if (kwFilter.length) {
-      filtered = filtered.filter(r =>
-        kwFilter.some(kw => (r[kwKey] || "").toLowerCase().includes(kw))
-      );
+  // For each keyword, find the best matching date for A and B
+  const snapshotA = [];
+  const snapshotB = [];
+  const dateAByKw = new Map();
+  const dateBByKw = new Map();
+
+  activeKeywords.forEach(kw => {
+    const bestA = findClosestForKw(dateA, kw);
+    const bestB = findClosestForKw(dateB, kw);
+
+    dateAByKw.set(kw, bestA);
+    dateBByKw.set(kw, bestB);
+
+    if (bestA) {
+      const rowsA = (byKwDate.get(`${kw}|${bestA}`) || [])
+        .map(r => mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey))
+        .filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank).slice(0, resultLimit);
+      snapshotA.push(...rowsA);
     }
-    return filtered.map(r => ({
-      rank: parseInt(r[rankKey]) || 0,
-      url: r[urlKey] || "",
-      keyword: r[kwKey] || "",
-      title: r[titleKey] || "",
-      sentiment: r[sentKey] || "",
-      owned: r[ownedKey] || "",
-      movement: r[movKey] || "",
-      displayUrl: r[dispKey] || "",
-      description: r[descKey] || "",
-    })).filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank).slice(0, resultLimit);
+
+    if (bestB) {
+      const rowsB = (byKwDate.get(`${kw}|${bestB}`) || [])
+        .map(r => mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey))
+        .filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank).slice(0, resultLimit);
+      snapshotB.push(...rowsB);
+    }
+  });
+
+  // Overall "actual" dates — use the most common resolved date across keywords
+  const dateAActual = mostCommon(Array.from(dateAByKw.values()).filter(Boolean)) || dateA;
+  const dateBActual = mostCommon(Array.from(dateBByKw.values()).filter(Boolean)) || dateB;
+
+  const foundKeywords = activeKeywords.filter(kw => dateAByKw.get(kw) || dateBByKw.get(kw));
+
+  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw };
+}
+
+function mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey) {
+  return {
+    rank: parseInt(r[rankKey]) || 0,
+    url: r[urlKey] || "",
+    keyword: r[kwKey] || "",
+    title: r[titleKey] || "",
+    sentiment: r[sentKey] || "",
+    owned: r[ownedKey] || "",
+    movement: r[movKey] || "",
+    displayUrl: r[dispKey] || "",
+    description: r[descKey] || "",
   };
+}
 
-  const snapshotA = filterRows(dateAActual);
-  const snapshotB = filterRows(dateBActual);
-
-  // Collect keywords found
-  const kwSet = new Set();
-  [...snapshotA, ...snapshotB].forEach(r => { if (r.keyword) kwSet.add(r.keyword); });
-  const foundKeywords = Array.from(kwSet);
-
-  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual };
+function mostCommon(arr) {
+  if (!arr.length) return null;
+  const counts = {};
+  arr.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
 }
 
 // ── Build comparison data payload for Claude ──────────────────────────────────
-function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20) {
+function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20, dateAByKw = null, dateBByKw = null) {
   const kwGroups = {};
   keywords.forEach(kw => {
     kwGroups[kw] = {
@@ -337,8 +392,11 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
 
   keywords.forEach(kw => {
     const { a, b } = kwGroups[kw];
+    const kwDateA = (dateAByKw && dateAByKw.get(kw)) || dateA;
+    const kwDateB = (dateBByKw && dateBByKw.get(kw)) || dateB;
     out += `\n=== KEYWORD: ${kw} ===\n`;
-    out += `Comparing top ${resultLimit} results. Sentiment % uses ${resultLimit} as denominator for BOTH dates.\n`;
+    out += `Comparing top ${resultLimit} results. Date A: ${kwDateA}${kwDateA !== dateA ? ` (nearest with data to requested ${dateA})` : ''}. Date B: ${kwDateB}${kwDateB !== dateB ? ` (nearest with data to requested ${dateB})` : ''}.\n`;
+    out += `Sentiment % uses ${resultLimit} as denominator for BOTH dates.\n`;
 
     // Build URL-level diff
     const urlsA = new Map(a.map(r => [r.url, r]));
@@ -529,7 +587,7 @@ table.dt{width:100%;border-collapse:collapse}
 
   return `You are an ORM analyst for Reputation Citadel. Generate a SERP Comparison Report comparing two date snapshots in HTML.
 
-TONE: Client-facing, professional. Use "Mr./Ms. [Last Name]" if name is a person. Positives are opportunities. Negatives are "exposure areas". Encouraging but honest.
+TONE: Client-facing, professional. Use "Mr./Ms. [Last Name]" if name is a person. Positives are opportunities. Negatives are "exposure areas". Encouraging but honest. Note: dates may vary per keyword if the archive did not have data for the requested date — in that case the nearest available date was used automatically. Mention this briefly in the relevant keyword section if it applies.
 
 USE THIS EXACT CSS AND STRUCTURE:
 
@@ -537,7 +595,7 @@ USE THIS EXACT CSS AND STRUCTURE:
 
 STRUCTURE:
 
-<div class="header"><img src="${LOGO}" alt="Reputation Citadel"><div class="divider"></div><div class="title"><h1>SERP Comparison Report</h1><div class="sub"><strong>[CLIENT]</strong> · [DATE A] vs [DATE B]</div></div></div>
+<div class="header"><img src="${LOGO}" alt="Reputation Citadel"><div class="divider"></div><div class="title"><h1>SERP Comparison Report</h1><div class="sub"><strong>[CLIENT]</strong> · [ACTUAL DATE A USED] vs [ACTUAL DATE B USED] — if dates were substituted, note that briefly</div></div></div>
 
 <div class="wrap">
 
