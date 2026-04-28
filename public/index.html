@@ -716,13 +716,17 @@ table tr:hover td { background: var(--surface-2); }
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
             <div class="form-group">
               <label>Date A — Baseline</label>
-              <input type="date" id="comp-date-a" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-body);font-size:0.9rem;outline:none">
-              <div class="form-hint">Earlier date (before)</div>
+              <input type="text" id="comp-date-a" placeholder="YYYY-MM-DD" maxlength="10"
+                style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:0.9rem;outline:none"
+                oninput="this.value=this.value.replace(/[^0-9-]/g,'')">
+              <div class="form-hint">Earlier date e.g. 2025-01-15</div>
             </div>
             <div class="form-group">
               <label>Date B — Latest</label>
-              <input type="date" id="comp-date-b" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-body);font-size:0.9rem;outline:none">
-              <div class="form-hint">Later date (after)</div>
+              <input type="text" id="comp-date-b" placeholder="YYYY-MM-DD" maxlength="10"
+                style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:0.9rem;outline:none"
+                oninput="this.value=this.value.replace(/[^0-9-]/g,'')">
+              <div class="form-hint">Later date e.g. 2025-03-01</div>
             </div>
           </div>
 
@@ -1520,7 +1524,8 @@ async function generateComparisonReport() {
 
   if (!clientId) { showToast('Please select a client'); return; }
   if (!sheetUrl) { showToast('Please enter a Google Sheet URL'); return; }
-  if (!dateA || !dateB) { showToast('Please select both dates'); return; }
+  if (!dateA || !dateB) { showToast('Please enter both dates in YYYY-MM-DD format'); return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateA) || !/^\d{4}-\d{2}-\d{2}$/.test(dateB)) { showToast('Dates must be in YYYY-MM-DD format e.g. 2025-01-15'); return; }
   if (dateA >= dateB) { showToast('Date A must be before Date B'); return; }
 
   const client = state.clients.find(c => c.id === clientId);
