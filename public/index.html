@@ -576,17 +576,24 @@ table tr:hover td { background: var(--surface-2); }
       <div class="topbar">
         <h1>Reports</h1>
         <div class="topbar-actions">
+          <button class="btn btn-sm" id="combine-btn" onclick="openCombineModal()" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            Combine Selected (<span id="combine-count">0</span>)
+          </button>
           <a href="/sample-report.html" target="_blank" class="btn btn-sm">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-            View Sample Report
+            Sample Report
           </a>
         </div>
       </div>
       <div class="content">
-        <div class="form-group" style="max-width:300px;margin-bottom:20px">
-          <select id="reports-client-filter" onchange="filterReports()">
-            <option value="all">All Clients</option>
-          </select>
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap">
+          <div class="form-group" style="max-width:260px;margin-bottom:0">
+            <select id="reports-client-filter" onchange="filterReports()">
+              <option value="all">All Clients</option>
+            </select>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted)">Select reports to combine them</div>
         </div>
         <div id="reports-list">
           <div class="empty-state">
@@ -603,7 +610,21 @@ table tr:hover td { background: var(--surface-2); }
         <h1>Generate Report</h1>
       </div>
       <div class="content">
-        <div class="card" style="max-width:640px">
+
+        <!-- Tab switcher -->
+        <div style="display:flex;gap:0;margin-bottom:24px;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;max-width:480px">
+          <button id="tab-standard" onclick="switchGenTab('standard')"
+            style="flex:1;padding:10px 16px;background:var(--gold);color:#000;border:none;font-family:var(--font-body);font-weight:600;font-size:0.85rem;cursor:pointer">
+            Standard Report
+          </button>
+          <button id="tab-comparison" onclick="switchGenTab('comparison')"
+            style="flex:1;padding:10px 16px;background:var(--surface-2);color:var(--text-muted);border:none;font-family:var(--font-body);font-weight:600;font-size:0.85rem;cursor:pointer">
+            Comparison Report
+          </button>
+        </div>
+
+        <!-- STANDARD REPORT FORM -->
+        <div id="gen-form-standard" class="card" style="max-width:640px">
           <h3 style="font-family:var(--font-display);margin-bottom:20px">New Report</h3>
 
           <div class="form-group">
@@ -653,9 +674,7 @@ table tr:hover td { background: var(--surface-2); }
           </div>
 
           <div style="display:flex;gap:12px;margin-top:24px">
-            <button class="btn btn-primary" onclick="generateReport()" id="gen-button">
-              Generate Report
-            </button>
+            <button class="btn btn-primary" onclick="generateReport()" id="gen-button">Generate Report</button>
             <button class="btn" onclick="navigateTo('dashboard')">Cancel</button>
           </div>
           <div id="gen-exec-hint" style="display:none;margin-top:12px;padding:12px 16px;background:rgba(184,134,11,0.1);border-radius:8px;font-size:0.85rem;color:var(--text-muted)">
@@ -669,6 +688,57 @@ table tr:hover td { background: var(--surface-2); }
             <p id="gen-status" style="font-size:0.85rem;color:var(--text-muted);margin-top:8px">Initializing...</p>
           </div>
         </div>
+
+        <!-- COMPARISON REPORT FORM -->
+        <div id="gen-form-comparison" class="card" style="max-width:640px;display:none">
+          <h3 style="font-family:var(--font-display);margin-bottom:8px">SERP Comparison Report</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">Compare search results between two dates from your Google Sheet archive.</p>
+
+          <div class="form-group">
+            <label>Client</label>
+            <select id="comp-client">
+              <option value="">Select a client...</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Google Sheet URL</label>
+            <input type="url" id="comp-sheet" placeholder="https://docs.google.com/spreadsheets/d/...">
+            <div class="form-hint">Must contain a SERP_Archive tab with historical snapshots</div>
+          </div>
+
+          <div class="form-group">
+            <label>Keywords to compare (comma separated, or leave blank for all)</label>
+            <input type="text" id="comp-keywords" placeholder="e.g., joseph mercola, dr mercola">
+            <div class="form-hint">Leave blank to include all keywords found in the archive</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="form-group">
+              <label>Date A — Baseline</label>
+              <input type="date" id="comp-date-a" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-body);font-size:0.9rem;outline:none">
+              <div class="form-hint">Earlier date (before)</div>
+            </div>
+            <div class="form-group">
+              <label>Date B — Latest</label>
+              <input type="date" id="comp-date-b" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-body);font-size:0.9rem;outline:none">
+              <div class="form-hint">Later date (after)</div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:12px;margin-top:24px">
+            <button class="btn btn-primary" onclick="generateComparisonReport()" id="comp-button">Generate Comparison</button>
+            <button class="btn" onclick="navigateTo('dashboard')">Cancel</button>
+          </div>
+
+          <div id="comp-progress" style="display:none;margin-top:24px">
+            <div style="background:var(--bg);border-radius:8px;height:8px;overflow:hidden">
+              <div id="comp-progress-bar" style="height:100%;background:var(--gold);width:0%;transition:width 0.5s"></div>
+            </div>
+            <p id="comp-status" style="font-size:0.85rem;color:var(--text-muted);margin-top:8px">Fetching archive data...</p>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -764,6 +834,33 @@ table tr:hover td { background: var(--surface-2); }
     <div style="display:flex;gap:12px;margin-top:24px">
       <button class="btn btn-primary" onclick="addClient()">Add Client</button>
       <button class="btn" onclick="closeModal('addClient')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ -->
+<!-- COMBINE REPORTS MODAL                  -->
+<!-- ════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-combine">
+  <div class="modal">
+    <h2>Combine Reports</h2>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">The selected reports will be synthesised into a single unified document.</p>
+    <div class="form-group">
+      <label>Combined Report Title</label>
+      <input type="text" id="combine-title" placeholder="e.g., Pax Health — Full ORM Overview">
+    </div>
+    <div id="combine-report-list" style="margin-bottom:20px;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:12px">
+      <p style="font-size:13px;color:var(--text-muted)">Loading selected reports...</p>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <button class="btn btn-primary" onclick="submitCombine()" id="combine-submit-btn">Combine Reports</button>
+      <button class="btn" onclick="closeModal('combine')">Cancel</button>
+    </div>
+    <div id="combine-progress" style="display:none;margin-top:16px">
+      <div style="background:var(--bg);border-radius:8px;height:8px;overflow:hidden">
+        <div id="combine-progress-bar" style="height:100%;background:var(--gold);width:0%;transition:width 0.5s"></div>
+      </div>
+      <p id="combine-status" style="font-size:0.85rem;color:var(--text-muted);margin-top:8px">Combining reports...</p>
     </div>
   </div>
 </div>
@@ -1116,6 +1213,8 @@ function refreshUI() {
   const clientOptions = '<option value="">Select a client...</option>' +
     state.clients.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   document.getElementById('gen-client').innerHTML = clientOptions;
+  const compClientEl = document.getElementById('comp-client');
+  if (compClientEl) compClientEl.innerHTML = clientOptions;
 
   const filterOptions = '<option value="all">All Clients</option>' +
     state.clients.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
@@ -1141,17 +1240,25 @@ function refreshUI() {
         serp: 'badge-blue',
         social: 'badge-green',
         llm: 'badge-amber',
-        executive: 'badge-blue'
+        executive: 'badge-blue',
+        comparison: 'badge-amber',
+        combined: 'badge-green',
       }[r.type] || 'badge-blue';
 
-      return `<div class="report-card">
-        <div class="report-info">
-          <h4>${esc(r.clientName)} — ${esc(r.typeName)}</h4>
-          <p>
-            <span class="badge ${typeBadge}">${esc(r.typeName)}</span>
-            &nbsp; ${new Date(r.createdAt).toLocaleDateString()} &nbsp;
-            ${r.keywords ? '· ' + esc(r.keywords) : ''}
-          </p>
+      return `<div class="report-card" id="rcard-${r.id}">
+        <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+          <input type="checkbox" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:var(--gold)"
+            onchange="toggleReportSelect('${r.id}', this)"
+            ${selectedReportIds.has(r.id) ? 'checked' : ''}>
+          <div class="report-info">
+            <h4>${esc(r.clientName)} — ${esc(r.typeName)}</h4>
+            <p>
+              <span class="badge ${typeBadge}">${esc(r.typeName)}</span>
+              &nbsp; ${new Date(r.createdAt).toLocaleDateString()} &nbsp;
+              ${r.keywords ? '· ' + esc(r.keywords) : ''}
+              ${r.dateA ? '· ' + esc(r.dateA) + ' vs ' + esc(r.dateB || '') : ''}
+            </p>
+          </div>
         </div>
         <div class="report-actions">
           <button class="btn btn-sm" onclick="viewReport('${r.id}')">View</button>
@@ -1379,6 +1486,170 @@ window.addEventListener('message', async (e) => {
 function dedupeById(arr) {
   const seen = new Set();
   return arr.filter(x => { if (!x.id || seen.has(x.id)) return false; seen.add(x.id); return true; });
+}
+
+// ── GENERATE TAB SWITCHING ────────────────────────────────────────
+function switchGenTab(tab) {
+  const isStandard = tab === 'standard';
+  document.getElementById('gen-form-standard').style.display = isStandard ? 'block' : 'none';
+  document.getElementById('gen-form-comparison').style.display = isStandard ? 'none' : 'block';
+  document.getElementById('tab-standard').style.background = isStandard ? 'var(--gold)' : 'var(--surface-2)';
+  document.getElementById('tab-standard').style.color = isStandard ? '#000' : 'var(--text-muted)';
+  document.getElementById('tab-comparison').style.background = isStandard ? 'var(--surface-2)' : 'var(--gold)';
+  document.getElementById('tab-comparison').style.color = isStandard ? 'var(--text-muted)' : '#000';
+
+  if (!isStandard) {
+    const genClient = document.getElementById('gen-client').value;
+    const compClient = document.getElementById('comp-client');
+    if (genClient && compClient) compClient.value = genClient;
+    const client = state.clients.find(c => c.id === (compClient ? compClient.value : ''));
+    if (client) {
+      if (!document.getElementById('comp-sheet').value) document.getElementById('comp-sheet').value = client.sheetUrl || '';
+      if (!document.getElementById('comp-keywords').value) document.getElementById('comp-keywords').value = client.keywords.join(', ');
+    }
+  }
+}
+
+// ── COMPARISON REPORT ────────────────────────────────────────────
+async function generateComparisonReport() {
+  const clientId = document.getElementById('comp-client').value;
+  const sheetUrl = document.getElementById('comp-sheet').value;
+  const keywords = document.getElementById('comp-keywords').value;
+  const dateA = document.getElementById('comp-date-a').value;
+  const dateB = document.getElementById('comp-date-b').value;
+
+  if (!clientId) { showToast('Please select a client'); return; }
+  if (!sheetUrl) { showToast('Please enter a Google Sheet URL'); return; }
+  if (!dateA || !dateB) { showToast('Please select both dates'); return; }
+  if (dateA >= dateB) { showToast('Date A must be before Date B'); return; }
+
+  const client = state.clients.find(c => c.id === clientId);
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+
+  document.getElementById('comp-progress').style.display = 'block';
+  document.getElementById('comp-button').disabled = true;
+
+  const steps = [
+    [20, 'Fetching SERP archive from Google Sheet...'],
+    [50, 'Comparing snapshots...'],
+    [75, 'Generating comparison report...'],
+    [95, 'Finalising...'],
+  ];
+  let stepIdx = 0;
+  const stepInterval = setInterval(() => {
+    if (stepIdx < steps.length) {
+      document.getElementById('comp-progress-bar').style.width = steps[stepIdx][0] + '%';
+      document.getElementById('comp-status').textContent = steps[stepIdx][1];
+      stepIdx++;
+    }
+  }, 10000);
+
+  try {
+    const resp = await fetch('/api/comparison', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+      body: JSON.stringify({ clientId, clientName: client.name, sheetUrl, keywords, dateA, dateB }),
+    });
+    const data = await resp.json();
+    clearInterval(stepInterval);
+    if (!resp.ok || data.error) throw new Error(data.error || 'Server error');
+
+    document.getElementById('comp-progress-bar').style.width = '100%';
+    document.getElementById('comp-status').textContent = 'Complete!';
+    if (data.report) { state.reports.unshift(data.report); saveState(); }
+
+    setTimeout(() => {
+      document.getElementById('comp-progress').style.display = 'none';
+      document.getElementById('comp-button').disabled = false;
+      document.getElementById('comp-progress-bar').style.width = '0%';
+      showToast('Comparison report generated for ' + client.name);
+      refreshUI();
+      navigateTo('reports');
+    }, 1000);
+
+  } catch (err) {
+    clearInterval(stepInterval);
+    document.getElementById('comp-progress').style.display = 'none';
+    document.getElementById('comp-button').disabled = false;
+    showToast('Error: ' + err.message);
+  }
+}
+
+// ── COMBINE REPORTS ───────────────────────────────────────────────
+let selectedReportIds = new Set();
+
+function toggleReportSelect(id, checkbox) {
+  if (checkbox.checked) selectedReportIds.add(id);
+  else selectedReportIds.delete(id);
+  updateCombineButton();
+}
+
+function updateCombineButton() {
+  const count = selectedReportIds.size;
+  const btn = document.getElementById('combine-btn');
+  const countEl = document.getElementById('combine-count');
+  if (btn) { btn.style.display = count >= 2 ? 'inline-flex' : 'none'; }
+  if (countEl) countEl.textContent = count;
+}
+
+function openCombineModal() {
+  const selected = state.reports.filter(r => selectedReportIds.has(r.id));
+  if (selected.length < 2) { showToast('Select at least 2 reports'); return; }
+  const listEl = document.getElementById('combine-report-list');
+  listEl.innerHTML = selected.map(r => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <strong>${esc(r.clientName)}</strong> — ${esc(r.typeName)}
+      <span style="color:var(--text-muted);font-size:11px;margin-left:8px">${new Date(r.createdAt).toLocaleDateString()}</span>
+    </div>`).join('');
+  const clients = [...new Set(selected.map(r => r.clientName))];
+  document.getElementById('combine-title').value = clients.length === 1
+    ? clients[0] + ' — Combined Report'
+    : 'Combined Report — ' + clients.join(', ');
+  openModal('combine');
+}
+
+async function submitCombine() {
+  const title = document.getElementById('combine-title').value;
+  const reportIds = Array.from(selectedReportIds);
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+  if (reportIds.length < 2) { showToast('Select at least 2 reports'); return; }
+  const selected = state.reports.filter(r => reportIds.includes(r.id));
+  const clientName = selected[0]?.clientName || '';
+
+  document.getElementById('combine-progress').style.display = 'block';
+  document.getElementById('combine-submit-btn').disabled = true;
+  document.getElementById('combine-progress-bar').style.width = '30%';
+  document.getElementById('combine-status').textContent = 'Synthesising reports...';
+
+  try {
+    const resp = await fetch('/api/combine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+      body: JSON.stringify({ reportIds, clientName, combinedTitle: title }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Server error');
+
+    document.getElementById('combine-progress-bar').style.width = '100%';
+    document.getElementById('combine-status').textContent = 'Done!';
+    if (data.report) { state.reports.unshift(data.report); saveState(); }
+
+    setTimeout(() => {
+      closeModal('combine');
+      document.getElementById('combine-progress').style.display = 'none';
+      document.getElementById('combine-submit-btn').disabled = false;
+      document.getElementById('combine-progress-bar').style.width = '0%';
+      selectedReportIds.clear();
+      updateCombineButton();
+      showToast('Combined report created');
+      refreshUI();
+      navigateTo('reports');
+    }, 1000);
+  } catch (err) {
+    document.getElementById('combine-progress').style.display = 'none';
+    document.getElementById('combine-submit-btn').disabled = false;
+    showToast('Error: ' + err.message);
+  }
 }
 </script>
 </body>
