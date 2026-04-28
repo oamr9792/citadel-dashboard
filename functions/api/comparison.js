@@ -30,18 +30,14 @@ export async function onRequestPost(context) {
 
     // Parse the archive CSV — use a lean parser that only extracts needed columns
     // This avoids timeout on large archives without losing any data
-    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders, sampleRow } =
+    const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, latestByUrlKw, allNegByKw, firstDate, lastDate, parsedHeaders, sampleRow } =
       extractSnapshots(archiveData, dateA, dateB, kwFilter, resultLimit);
 
     if (!snapshotA.length && !snapshotB.length) {
       return json({ error: `No data found near ${dateA} or ${dateB} in the archive. Check the sheet has data and try different dates.` }, 400);
     }
 
-    // If one snapshot is empty, warn but continue — the nearest-date fallback should have resolved this
-    // but if a keyword genuinely has no data near one date, we note it in the payload
-
-    // Build prompt data
-    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate);
+    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit, dateAByKw, dateBByKw, baselineByUrlKw, latestByUrlKw, allNegByKw, firstDate, lastDate);
 
     const systemPrompt = buildComparisonSystemPrompt();
     const userPrompt = `Client: ${clientName}
@@ -402,7 +398,34 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
   const dateBActual = mostCommon(Array.from(dateBByKw.values()).filter(Boolean)) || dateB;
   const foundKeywords = activeKeywords.filter(kw => dateAByKw.get(kw) || dateBByKw.get(kw));
 
-  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders: rawHeaders, sampleRow };
+  // Build: latest rank per url+kw (for "where is it now" regardless of selected dates)
+  const latestByUrlKw = new Map(); // "url|kw" -> {rank, date, title, sentiment, owned}
+  byKwDate.forEach((rows, kwDateKey) => {
+    const parts = kwDateKey.lastIndexOf("|");
+    const kw = kwDateKey.slice(0, parts);
+    const ds = kwDateKey.slice(parts + 1);
+    rows.forEach(r => {
+      const key = `${r.url}|${kw}`;
+      const existing = latestByUrlKw.get(key);
+      if (!existing || ds > existing.date) {
+        latestByUrlKw.set(key, { rank: r.rank, date: ds, title: r.title, sentiment: r.sentiment, owned: r.owned });
+      }
+    });
+  });
+
+  // All negative URLs ever seen per keyword (for full baseline analysis)
+  const allNegByKw = new Map(); // kw -> Set<url>
+  baselineByUrlKw.forEach((val, key) => {
+    if ((val.sentiment || "").toLowerCase() === "negative") {
+      const pipeIdx = key.lastIndexOf("|");
+      const url = key.slice(0, pipeIdx);
+      const kw = key.slice(pipeIdx + 1);
+      if (!allNegByKw.has(kw)) allNegByKw.set(kw, new Set());
+      allNegByKw.get(kw).add(url);
+    }
+  });
+
+  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, latestByUrlKw, allNegByKw, firstDate, lastDate, parsedHeaders: rawHeaders, sampleRow };
 }
 
 function mostCommon(arr) {
@@ -413,7 +436,7 @@ function mostCommon(arr) {
 }
 
 // ── Build comparison data payload for Claude ──────────────────────────────────
-function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20, dateAByKw = null, dateBByKw = null, baselineByUrlKw = null, firstDate = null, lastDate = null) {
+function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20, dateAByKw = null, dateBByKw = null, baselineByUrlKw = null, latestByUrlKw = null, allNegByKw = null, firstDate = null, lastDate = null) {
   const kwGroups = {};
   keywords.forEach(kw => {
     kwGroups[kw] = {
@@ -544,56 +567,60 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
     });
     out += `  Owned count: ${ownedA.length} → ${ownedB.length} in top ${resultLimit}\n`;
 
-    // ── PROGRAMME-START BASELINE: where did each negative result START vs where is it NOW ──
-    // This answers the key question: have negative results generally dropped since we started?
+    // ── PROGRAMME-START BASELINE ──────────────────────────────────
+    // Uses ALL negative URLs ever seen for this keyword in the archive — not just those in snapshots A/B
     if (baselineByUrlKw && firstDate) {
       out += `\nPROGRAMME-START BASELINE — ${kw} (first data: ${firstDate}, latest: ${lastDate || dateB}):\n`;
-      out += `This shows where each current or recent negative result was when we FIRST saw it in the archive.\n`;
+      out += `This covers EVERY URL ever labelled Negative for this keyword across the entire archive.\n`;
 
-      // All negative URLs seen in either snapshot
-      const allNegUrls = new Set([...negUrlsA.keys(), ...negUrlsB.keys()]);
+      const allNegUrlsForKw = (allNegByKw && allNegByKw.get(kw)) || new Set([...negUrlsA.keys(), ...negUrlsB.keys()]);
 
       let totalDelta = 0, countWithBaseline = 0, improved = 0, worsened = 0, unchanged = 0;
 
-      allNegUrls.forEach(url => {
-        const baseline = baselineByUrlKw ? baselineByUrlKw.get(`${url}|${kw}`) : null;
-        const currentRow = negUrlsB.get(url) || negUrlsA.get(url);
-        const currentRank = negUrlsB.has(url) ? negUrlsB.get(url).rank : null;
-        const title = (currentRow?.title || "").slice(0, 50);
+      allNegUrlsForKw.forEach(url => {
+        const baseline = baselineByUrlKw.get(`${url}|${kw}`);
+        if (!baseline) return;
 
-        if (baseline) {
-          const delta = currentRank !== null
-            ? currentRank - baseline.rank  // positive = moved down (good)
-            : resultLimit + 5 - baseline.rank; // fell off page — treat as pushed past the limit
+        // Current state: use latestByUrlKw for most up-to-date rank, regardless of selected dates
+        const latestInfo = latestByUrlKw ? latestByUrlKw.get(`${url}|${kw}`) : null;
+        const inSnapshotB = snapshotB.find(r => r.url === url && r.keyword === kw);
+        const currentRank = latestInfo ? latestInfo.rank : (inSnapshotB ? inSnapshotB.rank : null);
+        const isGone = !latestInfo && !inSnapshotB;
 
-          countWithBaseline++;
-          totalDelta += delta;
+        const title = (baseline.title || url).slice(0, 50);
+        const effectiveDelta = isGone
+          ? (resultLimit + 10) - baseline.rank  // treat as pushed well past the limit
+          : currentRank - baseline.rank;
 
-          const status = currentRank === null
-            ? `GONE (was #${baseline.rank} on ${baseline.date})`
-            : delta > 0
-              ? `DOWN ${delta} positions: #${baseline.rank} → #${currentRank} (started ${baseline.date})`
-              : delta < 0
-                ? `UP ${Math.abs(delta)} positions: #${baseline.rank} → #${currentRank} (started ${baseline.date}) ← CONCERN`
-                : `UNCHANGED at #${currentRank} (since ${baseline.date})`;
+        countWithBaseline++;
+        totalDelta += effectiveDelta;
 
-          if (currentRank === null || delta > 0) improved++;
-          else if (delta < 0) worsened++;
-          else unchanged++;
-
-          out += `  "${title}": ${status}\n`;
+        let statusStr;
+        if (isGone) {
+          statusStr = `ELIMINATED (was #${baseline.rank} on ${baseline.date})`;
+          improved++;
+        } else if (currentRank > baseline.rank) {
+          statusStr = `DOWN ${effectiveDelta} positions: #${baseline.rank} → #${currentRank} (started ${baseline.date})`;
+          improved++;
+        } else if (currentRank < baseline.rank) {
+          statusStr = `UP ${Math.abs(effectiveDelta)} positions: #${baseline.rank} → #${currentRank} (started ${baseline.date}) ← CONCERN`;
+          worsened++;
         } else {
-          out += `  "${title}": current #${currentRank || "off page"} — no baseline found (may predate archive)\n`;
+          statusStr = `UNCHANGED at #${currentRank} (since ${baseline.date})`;
+          unchanged++;
         }
+
+        out += `  "${title}": ${statusStr}\n`;
+        out += `    URL: ${url}\n`;
       });
 
       if (countWithBaseline > 0) {
-        const avgDelta = (totalDelta / countWithBaseline).toFixed(1);
-        // avgDelta positive = moved down (good). Show as plain positive number.
-        const avgDisplay = Math.abs(parseFloat(avgDelta)).toFixed(1);
-        out += `  OVERALL: ${improved}/${countWithBaseline} negative results improved since programme start. `;
-        out += `Average movement: ${avgDisplay} positions down (plain number, no + sign). `;
-        out += `${worsened} results moved up (concern), ${unchanged} unchanged.\n`;
+        const avgDisplay = Math.abs(totalDelta / countWithBaseline).toFixed(1);
+        out += `  OVERALL: ${improved}/${countWithBaseline} negative results improved or eliminated since programme start. `;
+        out += `Average movement: ${avgDisplay} positions down. `;
+        out += `${worsened} worsened, ${unchanged} unchanged.\n`;
+      } else {
+        out += `  No baseline data found — archive may not yet contain labelled negatives for this keyword.\n`;
       }
     }
 
