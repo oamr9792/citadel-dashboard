@@ -590,14 +590,15 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, re
       }
     }
 
-    // Owned narrative percentages — replaces sentiment % as primary metric
+    // Owned narrative percentages — denominator is ALWAYS resultLimit, never actual row count
     const ownedPctA = Math.round((ownedA.length / resultLimit) * 100);
     const ownedPctB = Math.round((ownedB.length / resultLimit) * 100);
-    out += `\nOWNED NARRATIVE — ${kw} (denominator = ${resultLimit}):\n`;
-    out += `  Date A: ${ownedA.length} owned results = ${ownedPctA}% of top ${resultLimit}\n`;
-    out += `  Date B: ${ownedB.length} owned results = ${ownedPctB}% of top ${resultLimit}\n`;
+    out += `\nOWNED NARRATIVE — ${kw} (denominator MUST be ${resultLimit} for both dates, always):\n`;
+    out += `  Date A (${dateA}): ${ownedA.length} owned of ${resultLimit} results = ${ownedPctA}%\n`;
+    out += `  Date B (${dateB}): ${ownedB.length} owned of ${resultLimit} results = ${ownedPctB}%\n`;
     out += `  Change: ${ownedB.length - ownedA.length >= 0 ? '+' : ''}${ownedB.length - ownedA.length} owned results (${ownedPctB - ownedPctA >= 0 ? '+' : ''}${ownedPctB - ownedPctA}pp)\n`;
-    out += `  Secondary (for compact display only): Pos A=${posA} Neg A=${negA} Neu A=${neuA} / Pos B=${posB} Neg B=${negB} Neu B=${neuB}\n`;
+    out += `  IMPORTANT: Both bars must say "of ${resultLimit} results" — do not use the actual number of rows returned.\n`;
+    out += `  Secondary sentiment: Pos A=${posA} Neg A=${negA} Neu A=${neuA} / Pos B=${posB} Neg B=${negB} Neu B=${neuB}\n`;
   });
 
   return out;
@@ -771,12 +772,13 @@ SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
     b) This period (Date A vs Date B): div.card with h3 showing the two dates.
        Short paragraph on what moved in just this period. 2-3 sentences.
 
-    c) Owned Narrative: two rows showing Date A and Date B owned content counts.
-       Show: "Owned results: X of [N] ([Y]%)" for each date, with a simple bar showing owned (gold) vs not-owned (grey).
+    c) Owned Narrative: two rows comparing Date A and Date B.
+       CRITICAL: always use the fixed top-N number from the data as the denominator for both dates — never the actual number of rows returned for that snapshot. The data will tell you "X owned of [N] results" — use exactly those numbers.
+       Show: "Owned results: X of [N] ([Y]%)" for each date with a bar:
        <div style="margin:8px 0"><span class="date-badge date-a">[DATE A]</span> <strong>X owned</strong> of [N] results ([Y]%)</div>
-       <div style="background:#e8e8e8;height:16px;border-radius:4px;overflow:hidden;margin:4px 0"><div style="height:100%;background:var(--owned-gold);width:[Y]%"></div></div>
-       Repeat for Date B with date-b badge. This replaces the sentiment percentage bar as the primary metric.
-       Below, add the sentiment distribution as a compact secondary note: "Sentiment: X pos / Y neg / Z neu"
+       <div style="background:#e8e8e8;height:16px;border-radius:4px;overflow:hidden;margin:4px 0 12px"><div style="height:100%;background:var(--owned-gold);width:[Y]%"></div></div>
+       Repeat identically for Date B with date-b badge and its own numbers.
+       Below both bars, one compact line: "Sentiment: [posA] pos / [negA] neg / [neuA] neu → [posB] pos / [negB] neg / [neuB] neu"
 
     d) Full results table: table.dt columns: Rank | Sentiment | Since Start | Change (A→B) | Owned | Title | URL
        CRITICAL COLOUR RULE — movement colours are CONTEXT-AWARE:
