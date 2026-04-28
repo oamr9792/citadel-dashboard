@@ -707,26 +707,36 @@ table tr:hover td { background: var(--surface-2); }
             <div class="form-hint">Must contain a SERP_Archive tab with historical snapshots</div>
           </div>
 
-          <div class="form-group">
-            <label>Keywords to compare (comma separated, or leave blank for all)</label>
-            <input type="text" id="comp-keywords" placeholder="e.g., joseph mercola, dr mercola">
-            <div class="form-hint">Leave blank to include all keywords found in the archive</div>
+          <div style="margin-bottom:16px">
+            <button class="btn btn-sm" onclick="loadSheetDates()" id="load-dates-btn" style="width:100%;justify-content:center">
+              Load available dates from sheet
+            </button>
+            <div id="load-dates-status" style="font-size:12px;color:var(--text-muted);margin-top:6px;display:none"></div>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div id="comp-date-fields" style="display:none">
             <div class="form-group">
-              <label>Date A — Baseline</label>
-              <input type="text" id="comp-date-a" placeholder="MM/DD/YYYY" maxlength="10"
-                style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:0.9rem;outline:none"
-                oninput="this.value=this.value.replace(/[^0-9/]/g,'')">
-              <div class="form-hint">Earlier date e.g. 3/28/2026</div>
+              <label>Keywords to compare</label>
+              <select id="comp-keywords-select" multiple style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-body);font-size:0.9rem;outline:none;height:100px">
+              </select>
+              <div class="form-hint">Hold Ctrl/Cmd to select multiple. Leave all unselected to include all keywords.</div>
             </div>
-            <div class="form-group">
-              <label>Date B — Latest</label>
-              <input type="text" id="comp-date-b" placeholder="MM/DD/YYYY" maxlength="10"
-                style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:0.9rem;outline:none"
-                oninput="this.value=this.value.replace(/[^0-9/]/g,'')">
-              <div class="form-hint">Later date e.g. 4/28/2026</div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div class="form-group">
+                <label>Date A — Baseline</label>
+                <select id="comp-date-a" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:0.9rem;outline:none">
+                  <option value="">Select date...</option>
+                </select>
+                <div class="form-hint">Earlier / before</div>
+              </div>
+              <div class="form-group">
+                <label>Date B — Latest</label>
+                <select id="comp-date-b" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:0.9rem;outline:none">
+                  <option value="">Select date...</option>
+                </select>
+                <div class="form-hint">Later / after</div>
+              </div>
             </div>
           </div>
 
@@ -1492,6 +1502,69 @@ function dedupeById(arr) {
   return arr.filter(x => { if (!x.id || seen.has(x.id)) return false; seen.add(x.id); return true; });
 }
 
+// ── LOAD SHEET DATES ─────────────────────────────────────────────
+async function loadSheetDates() {
+  const sheetUrl = document.getElementById('comp-sheet').value;
+  if (!sheetUrl) { showToast('Please enter a Google Sheet URL first'); return; }
+
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+  const btn = document.getElementById('load-dates-btn');
+  const status = document.getElementById('load-dates-status');
+
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  status.style.display = 'block';
+  status.textContent = 'Fetching available dates from archive...';
+
+  try {
+    const resp = await fetch('/api/sheet-dates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+      body: JSON.stringify({ sheetUrl }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Failed to load dates');
+
+    const { dates, keywords } = data;
+
+    if (!dates.length) {
+      status.textContent = 'No snapshot dates found in the archive.';
+      btn.disabled = false;
+      btn.textContent = 'Load available dates from sheet';
+      return;
+    }
+
+    // Format dates as M/D/YYYY for display
+    function fmtDate(iso) {
+      const [y, m, d] = iso.split('-');
+      return `${parseInt(m)}/${parseInt(d)}/${y}`;
+    }
+
+    // Populate date dropdowns
+    const dateOpts = dates.map(d => `<option value="${d}">${fmtDate(d)}</option>`).join('');
+    document.getElementById('comp-date-a').innerHTML = '<option value="">Select date...</option>' + dateOpts;
+    // Date B defaults to latest
+    document.getElementById('comp-date-b').innerHTML = '<option value="">Select date...</option>' + dateOpts;
+    document.getElementById('comp-date-b').value = dates[dates.length - 1];
+    // Date A defaults to earliest
+    document.getElementById('comp-date-a').value = dates[0];
+
+    // Populate keyword multiselect
+    const kwSelect = document.getElementById('comp-keywords-select');
+    kwSelect.innerHTML = keywords.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+
+    document.getElementById('comp-date-fields').style.display = 'block';
+    status.textContent = `Found ${dates.length} snapshot date${dates.length !== 1 ? 's' : ''} and ${keywords.length} keyword${keywords.length !== 1 ? 's' : ''}.`;
+    btn.textContent = 'Reload dates';
+    btn.disabled = false;
+
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+    btn.disabled = false;
+    btn.textContent = 'Load available dates from sheet';
+  }
+}
+
 // ── GENERATE TAB SWITCHING ────────────────────────────────────────
 function switchGenTab(tab) {
   const isStandard = tab === 'standard';
@@ -1509,8 +1582,11 @@ function switchGenTab(tab) {
     const client = state.clients.find(c => c.id === (compClient ? compClient.value : ''));
     if (client) {
       if (!document.getElementById('comp-sheet').value) document.getElementById('comp-sheet').value = client.sheetUrl || '';
-      if (!document.getElementById('comp-keywords').value) document.getElementById('comp-keywords').value = client.keywords.join(', ');
     }
+    // Reset date fields when switching tabs
+    document.getElementById('comp-date-fields').style.display = 'none';
+    document.getElementById('load-dates-status').style.display = 'none';
+    document.getElementById('load-dates-btn').textContent = 'Load available dates from sheet';
   }
 }
 
@@ -1524,23 +1600,12 @@ async function generateComparisonReport() {
 
   if (!clientId) { showToast('Please select a client'); return; }
   if (!sheetUrl) { showToast('Please enter a Google Sheet URL'); return; }
-  if (!dateA || !dateB) { showToast('Please enter both dates e.g. 3/28/2026'); return; }
+  if (!dateA || !dateB) { showToast('Please select both dates'); return; }
+  if (dateA >= dateB) { showToast('Date A must be before Date B'); return; }
 
-  // Convert MM/DD/YYYY to YYYY-MM-DD for the API
-  function toIso(d) {
-    const parts = d.split('/');
-    if (parts.length !== 3) return null;
-    const [m, day, y] = parts;
-    if (!m || !day || !y || y.length !== 4) return null;
-    return `${y}-${m.padStart(2,'0')}-${day.padStart(2,'0')}`;
-  }
-
-  const dateAIso = toIso(dateA);
-  const dateBIso = toIso(dateB);
-
-  if (!dateAIso) { showToast('Date A must be in MM/DD/YYYY format e.g. 3/28/2026'); return; }
-  if (!dateBIso) { showToast('Date B must be in MM/DD/YYYY format e.g. 4/28/2026'); return; }
-  if (dateAIso >= dateBIso) { showToast('Date A must be before Date B'); return; }
+  // Get selected keywords from multiselect
+  const kwSelect = document.getElementById('comp-keywords-select');
+  const selectedKws = kwSelect ? Array.from(kwSelect.selectedOptions).map(o => o.value).join(', ') : '';
 
   const client = state.clients.find(c => c.id === clientId);
   const password = localStorage.getItem('citadel_password') || 'citadel2025';
@@ -1567,7 +1632,7 @@ async function generateComparisonReport() {
     const resp = await fetch('/api/comparison', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
-      body: JSON.stringify({ clientId, clientName: client.name, sheetUrl, keywords, dateA: dateAIso, dateB: dateBIso }),
+      body: JSON.stringify({ clientId, clientName: client.name, sheetUrl, keywords: selectedKws, dateA, dateB }),
     });
     const data = await resp.json();
     clearInterval(stepInterval);
