@@ -1062,6 +1062,8 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
   document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+  // Always reset generate button when visiting generate page
+  if (page === 'generate') resetGenUI();
   refreshUI();
 }
 
@@ -1219,9 +1221,18 @@ async function callGenerate(password, body) {
 }
 
 function resetGenUI() {
-  document.getElementById('gen-progress').style.display = 'none';
-  document.getElementById('gen-button').disabled = false;
-  document.getElementById('gen-progress-bar').style.width = '0%';
+  const genBtn = document.getElementById('gen-button');
+  const compBtn = document.getElementById('comp-button');
+  const genProg = document.getElementById('gen-progress');
+  const compProg = document.getElementById('comp-progress');
+  if (genBtn) { genBtn.disabled = false; genBtn.textContent = genBtn.textContent.replace('...', '') || 'Generate Report'; }
+  if (compBtn) { compBtn.disabled = false; }
+  if (genProg) { genProg.style.display = 'none'; }
+  if (compProg) { compProg.style.display = 'none'; }
+  const bar = document.getElementById('gen-progress-bar');
+  const compBar = document.getElementById('comp-progress-bar');
+  if (bar) bar.style.width = '0%';
+  if (compBar) compBar.style.width = '0%';
 }
 
 function setProgress(pct, msg) {
