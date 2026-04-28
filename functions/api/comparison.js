@@ -28,18 +28,10 @@ export async function onRequestPost(context) {
       ? keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean)
       : [];
 
-    // Parse the archive CSV into snapshot rows
-    // Cap archive CSV to last 50,000 lines to prevent timeout on large sheets
-    const archiveLines = archiveData.split("\n");
-    const headerLine = archiveLines[0];
-    const dataLines = archiveLines.slice(1).filter(l => l.trim());
-    // Keep all rows but warn if very large
-    const cappedCsv = dataLines.length > 10000
-      ? headerLine + "\n" + dataLines.slice(-10000).join("\n")
-      : archiveData;
-
+    // Parse the archive CSV — use a lean parser that only extracts needed columns
+    // This avoids timeout on large archives without losing any data
     const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders, sampleRow } =
-      extractSnapshots(cappedCsv, dateA, dateB, kwFilter, resultLimit);
+      extractSnapshots(archiveData, dateA, dateB, kwFilter, resultLimit);
 
     if (!snapshotA.length && !snapshotB.length) {
       return json({ error: `No data found near ${dateA} or ${dateB} in the archive. Check the sheet has data and try different dates.` }, 400);
@@ -68,10 +60,10 @@ CRITICAL: Output ONLY complete HTML. No markdown. No commentary.`;
     if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
 
     // DEBUG: expose what we actually parsed
+    const archiveRowCount = archiveData.split("\n").filter(l => l.trim()).length - 1;
     const debugInfo = {
       firstDate, lastDate,
-      totalArchiveRows: dataLines.length,
-      cappedTo: Math.min(dataLines.length, 10000),
+      totalArchiveRows: archiveRowCount,
       headers: parsedHeaders,
       sampleRow,
       foundKeywords,
@@ -285,62 +277,93 @@ function rawToDateStr(raw) {
 }
 
 function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
-  const { rows } = parseCSV(csv);
+  const lines = csv.split("\n");
+  if (lines.length < 2) return { snapshotA: [], snapshotB: [], foundKeywords: [], dateAActual: dateA, dateBActual: dateB, dateAByKw: new Map(), dateBByKw: new Map(), baselineByUrlKw: new Map(), firstDate: null, lastDate: null, parsedHeaders: [], sampleRow: {} };
 
-  // Find column keys
-  const sampleRow = rows[0] || {};
-  const dateKey = Object.keys(sampleRow).find(k =>
-    k.includes("snapshot") || k.includes("fetched")
-  ) || "snapshot date";
+  // Parse header once to get column indices
+  const rawHeaders = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/[★\s]+/g, " ").trim());
+  const hi = name => rawHeaders.indexOf(name);
 
-  const rankKey = Object.keys(sampleRow).find(k => k === "rank") || "rank";
-  const urlKey = Object.keys(sampleRow).find(k => k === "url") || "url";
-  const kwKey = Object.keys(sampleRow).find(k => k === "keyword") || "keyword";
-  const titleKey = Object.keys(sampleRow).find(k => k === "title") || "title";
-  const sentKey = Object.keys(sampleRow).find(k => k.includes("sentiment")) || "sentiment";
-  const ownedKey = Object.keys(sampleRow).find(k => k.includes("owned")) || "owned";
-  const movKey = Object.keys(sampleRow).find(k => k.includes("movement")) || "movement";
-  const dispKey = Object.keys(sampleRow).find(k => k.includes("display")) || "display url";
-  const descKey = Object.keys(sampleRow).find(k => k.includes("meta") || k.includes("description") || k.includes("snippet")) || "meta description";
+  const iDate = hi("snapshot date");
+  const iRank = hi("rank");
+  const iSent = hi("sentiment");
+  const iOwned = hi("owned");
+  const iUrl  = hi("url");
+  const iKw   = hi("keyword");
+  const iTitle = hi("title");
+  const iMov  = hi("movement");
+  const iDisp = hi("display url");
+  const iDesc = (() => { const i = rawHeaders.findIndex(h => h.includes("meta") || h.includes("description")); return i >= 0 ? i : -1; })();
 
-  // Index all rows by (keyword, date) for fast lookup
-  // Also track which dates have data for each keyword
-  const byKwDate = new Map(); // "kw|date" -> rows[]
-  const kwDates = new Map();  // keyword -> Set<dateStr>
+  if (iDate < 0 || iRank < 0 || iUrl < 0 || iKw < 0) {
+    return { snapshotA: [], snapshotB: [], foundKeywords: [], dateAActual: dateA, dateBActual: dateB, dateAByKw: new Map(), dateBByKw: new Map(), baselineByUrlKw: new Map(), firstDate: null, lastDate: null, parsedHeaders: rawHeaders, sampleRow: {} };
+  }
+
+  // Single pass: collect everything needed
+  const byKwDate = new Map();   // "kw|date" -> row[]
+  const kwDates  = new Map();   // kw -> Set<dateStr>
   const allDates = new Set();
+  const baselineByUrlKw = new Map(); // "url|kw" -> {rank, date, title, sentiment}
 
-  rows.forEach(r => {
-    const ds = rawToDateStr(r[dateKey] || "");
-    if (!ds) return;
+  let sampleRow = {};
+  let sampleSet = false;
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+
+    const cols = parseCSVLine(line);
+    const rawDate = (cols[iDate] || "").trim();
+    const ds = rawToDateStr(rawDate);
+    if (!ds) continue;
+
+    const rawKw = (cols[iKw] || "").trim();
+    if (!rawKw) continue;
+
+    // Apply keyword filter early to skip irrelevant rows fast
+    if (kwFilter.length && !kwFilter.some(f => rawKw.toLowerCase().includes(f))) continue;
+
+    const rank = parseInt(cols[iRank]);
+    if (isNaN(rank) || rank <= 0) continue;
+
+    const url   = (cols[iUrl]   || "").trim();
+    const sent  = (cols[iSent]  || "").trim();
+    const owned = (cols[iOwned] || "").trim();
+    const title = (cols[iTitle] || "").trim();
+    const mov   = iMov  >= 0 ? (cols[iMov]  || "").trim() : "";
+    const disp  = iDisp >= 0 ? (cols[iDisp] || "").trim() : "";
+    const desc  = iDesc >= 0 ? (cols[iDesc] || "").trim() : "";
+
     allDates.add(ds);
-    const kw = (r[kwKey] || "").trim();
-    if (!kw) return;
-    const key = `${kw}|${ds}`;
-    if (!byKwDate.has(key)) byKwDate.set(key, []);
-    byKwDate.get(key).push(r);
-    if (!kwDates.has(kw)) kwDates.set(kw, new Set());
-    kwDates.get(kw).add(ds);
-  });
+    if (!kwDates.has(rawKw)) kwDates.set(rawKw, new Set());
+    kwDates.get(rawKw).add(ds);
+
+    const kwDateKey = `${rawKw}|${ds}`;
+    if (!byKwDate.has(kwDateKey)) byKwDate.set(kwDateKey, []);
+    byKwDate.get(kwDateKey).push({ rank, url, keyword: rawKw, title, sentiment: sent, owned, movement: mov, displayUrl: disp, description: desc });
+
+    // Baseline: earliest rank per url+kw
+    const baseKey = `${url}|${rawKw}`;
+    const existing = baselineByUrlKw.get(baseKey);
+    if (!existing || ds < existing.date) {
+      baselineByUrlKw.set(baseKey, { rank, date: ds, title, sentiment: sent });
+    }
+
+    if (!sampleSet && sent) { sampleRow = { "snapshot date": rawDate, rank: cols[iRank], sentiment: sent, owned, url, keyword: rawKw }; sampleSet = true; }
+  }
 
   const sortedDates = Array.from(allDates).sort();
+  const firstDate = sortedDates[0] || null;
+  const lastDate  = sortedDates[sortedDates.length - 1] || null;
 
-  // Find closest date to target that has data for a specific keyword.
-  // Falls back to global allDates if keyword has no data near target.
-  const findClosestForKw = (target, kw) => {
+  const findClosest = (target, kw) => {
     if (!target) return null;
-
-    // Try keyword-specific dates first
     const available = kwDates.get(kw);
     const searchSet = (available && available.size) ? available : allDates;
     if (!searchSet.size) return null;
-
-    // Exact match
     if (searchSet.has(target)) return target;
-
-    // Find nearest available date
     const targetTs = new Date(target).getTime();
     if (isNaN(targetTs)) return Array.from(searchSet).sort()[0];
-
     let closest = null, closestDiff = Infinity;
     searchSet.forEach(ds => {
       const diff = Math.abs(new Date(ds).getTime() - targetTs);
@@ -349,88 +372,37 @@ function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
     return closest;
   };
 
-  // Determine which keywords we're working with
   const allKeywords = Array.from(kwDates.keys());
   const activeKeywords = kwFilter.length
     ? allKeywords.filter(kw => kwFilter.some(f => kw.toLowerCase().includes(f)))
     : allKeywords;
 
-  // For each keyword, find the best matching date for A and B
-  const snapshotA = [];
-  const snapshotB = [];
-  const dateAByKw = new Map();
-  const dateBByKw = new Map();
+  const snapshotA = [], snapshotB = [];
+  const dateAByKw = new Map(), dateBByKw = new Map();
 
   activeKeywords.forEach(kw => {
-    const bestA = findClosestForKw(dateA, kw);
-    const bestB = findClosestForKw(dateB, kw);
-
+    const bestA = findClosest(dateA, kw);
+    const bestB = findClosest(dateB, kw);
     dateAByKw.set(kw, bestA);
     dateBByKw.set(kw, bestB);
 
     if (bestA) {
-      const rowsA = (byKwDate.get(`${kw}|${bestA}`) || [])
-        .map(r => mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey))
+      const rows = (byKwDate.get(`${kw}|${bestA}`) || [])
         .filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank).slice(0, resultLimit);
-      snapshotA.push(...rowsA);
+      snapshotA.push(...rows);
     }
-
     if (bestB) {
-      const rowsB = (byKwDate.get(`${kw}|${bestB}`) || [])
-        .map(r => mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey))
+      const rows = (byKwDate.get(`${kw}|${bestB}`) || [])
         .filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank).slice(0, resultLimit);
-      snapshotB.push(...rowsB);
+      snapshotB.push(...rows);
     }
   });
 
-  // Overall "actual" dates — use the most common resolved date across keywords
   const dateAActual = mostCommon(Array.from(dateAByKw.values()).filter(Boolean)) || dateA;
   const dateBActual = mostCommon(Array.from(dateBByKw.values()).filter(Boolean)) || dateB;
-
   const foundKeywords = activeKeywords.filter(kw => dateAByKw.get(kw) || dateBByKw.get(kw));
 
-  // ── Baseline tracker: earliest rank for EVERY URL per keyword across the FULL archive ──
-  // This answers "where did this result start?" regardless of which two dates were selected
-  const baselineByUrlKw = new Map(); // "url|kw" -> { rank, date, title }
-  const sortedDatesList = Array.from(allDates).sort();
-  const firstDate = sortedDatesList[0] || null;
-  const lastDate = sortedDatesList[sortedDatesList.length - 1] || null;
-
-  rows.forEach(r => {
-    const ds = rawToDateStr(r[dateKey] || "");
-    if (!ds) return;
-    const kw = (r[kwKey] || "").trim();
-    const url = (r[urlKey] || "").trim();
-    const rank = parseInt(r[rankKey]);
-    if (!kw || !url || isNaN(rank) || rank <= 0) return;
-
-    const key = `${url}|${kw}`;
-    const existing = baselineByUrlKw.get(key);
-    if (!existing || ds < existing.date) {
-      baselineByUrlKw.set(key, {
-        rank,
-        date: ds,
-        title: (r[titleKey] || "").trim(),
-        sentiment: (r[sentKey] || "").trim(),
-      });
-    }
-  });
-
-  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders: Object.keys(rows[0] || {}), sampleRow: rows[0] || {} };
-}
-
-function mapRow(r, rankKey, urlKey, kwKey, titleKey, sentKey, ownedKey, movKey, dispKey, descKey) {
-  return {
-    rank: parseInt(r[rankKey]) || 0,
-    url: r[urlKey] || "",
-    keyword: r[kwKey] || "",
-    title: r[titleKey] || "",
-    sentiment: r[sentKey] || "",
-    owned: r[ownedKey] || "",
-    movement: r[movKey] || "",
-    displayUrl: r[dispKey] || "",
-    description: r[descKey] || "",
-  };
+  return { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual, dateAByKw, dateBByKw, baselineByUrlKw, firstDate, lastDate, parsedHeaders: rawHeaders, sampleRow };
 }
 
 function mostCommon(arr) {
