@@ -879,6 +879,97 @@ table tr:hover td { background: var(--surface-2); }
   </div>
 </div>
 
+<!-- ════════════════════════════════════════ -->
+<!-- DRAFT REPORT EDITOR OVERLAY            -->
+<!-- ════════════════════════════════════════ -->
+<div id="draft-overlay" style="display:none;position:fixed;inset:0;z-index:1000;background:var(--bg);flex-direction:column">
+
+  <!-- Editor toolbar -->
+  <div id="draft-toolbar" style="
+    display:flex;align-items:center;gap:12px;padding:12px 20px;
+    background:var(--surface);border-bottom:1px solid var(--border);
+    flex-shrink:0;flex-wrap:wrap
+  ">
+    <div style="font-family:var(--font-display);font-size:1rem;color:var(--text);margin-right:4px" id="draft-title">Draft Report</div>
+    <div style="flex:1"></div>
+
+    <!-- Mode toggle -->
+    <div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:12px">
+      <button id="mode-btn-view" onclick="setDraftMode('view')"
+        style="padding:6px 14px;border:none;background:var(--gold);color:#000;font-family:var(--font-body);font-weight:600;cursor:pointer">
+        View
+      </button>
+      <button id="mode-btn-edit" onclick="setDraftMode('edit')"
+        style="padding:6px 14px;border:none;background:var(--surface-2);color:var(--text-muted);font-family:var(--font-body);font-weight:600;cursor:pointer">
+        Edit
+      </button>
+      <button id="mode-btn-annotate" onclick="setDraftMode('annotate')"
+        style="padding:6px 14px;border:none;background:var(--surface-2);color:var(--text-muted);font-family:var(--font-body);font-weight:600;cursor:pointer">
+        Annotate
+      </button>
+    </div>
+
+    <div id="draft-mode-hint" style="font-size:11px;color:var(--text-muted)">View mode</div>
+
+    <button class="btn btn-sm" onclick="finaliseDraftReport()" id="finalise-btn"
+      style="background:var(--gold);color:#000;font-weight:600;border-color:var(--gold)">
+      Finalise Report
+    </button>
+    <button class="btn btn-sm" onclick="closeDraftEditor()">Close</button>
+  </div>
+
+  <!-- Annotate instruction bar (hidden unless annotate mode) -->
+  <div id="annotate-bar" style="
+    display:none;padding:10px 20px;background:rgba(184,134,11,0.1);
+    border-bottom:1px solid rgba(184,134,11,0.3);font-size:12px;color:var(--gold)
+  ">
+    Click any section in the report to annotate it. A comment box will appear.
+  </div>
+
+  <!-- Report iframe -->
+  <div style="flex:1;overflow:hidden;position:relative">
+    <iframe id="draft-iframe" style="width:100%;height:100%;border:none;background:#fff"></iframe>
+
+    <!-- Annotation popup -->
+    <div id="annotation-popup" style="
+      display:none;position:absolute;z-index:100;
+      background:var(--surface);border:1px solid var(--border);border-radius:10px;
+      padding:16px;width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.4)
+    ">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Annotation for selected section</div>
+      <div id="annotation-section-preview" style="
+        font-size:11px;color:var(--text-muted);padding:8px;background:var(--bg);
+        border-radius:6px;margin-bottom:10px;max-height:60px;overflow:hidden;
+        border-left:3px solid var(--gold)
+      "></div>
+      <textarea id="annotation-input" placeholder="Describe the change you want e.g. 'Make this more concise' or 'Rewrite in a more positive tone'" style="
+        width:100%;height:80px;resize:vertical;
+        background:var(--bg);border:1px solid var(--border);border-radius:6px;
+        color:var(--text);font-family:var(--font-body);font-size:13px;
+        padding:8px;outline:none;line-height:1.5
+      "></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-primary btn-sm" onclick="submitAnnotation()" id="annotation-submit-btn" style="flex:1">
+          Apply with Claude
+        </button>
+        <button class="btn btn-sm" onclick="closeAnnotationPopup()">Cancel</button>
+      </div>
+      <div id="annotation-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;display:none">
+        Claude is rewriting this section...
+      </div>
+    </div>
+  </div>
+
+  <!-- Finalise progress -->
+  <div id="finalise-progress" style="display:none;padding:12px 20px;background:var(--surface);border-top:1px solid var(--border)">
+    <div style="background:var(--bg);border-radius:8px;height:6px;overflow:hidden">
+      <div id="finalise-bar" style="height:100%;background:var(--gold);width:0%;transition:width 0.4s"></div>
+    </div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:6px" id="finalise-status">Saving final report...</p>
+  </div>
+
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -1259,13 +1350,18 @@ function refreshUI() {
         combined: 'badge-green',
       }[r.type] || 'badge-blue';
 
+      const statusBadge = r.status === 'final'
+        ? '<span class="badge" style="background:rgba(30,132,73,0.15);color:var(--green);font-size:10px">Final</span>'
+        : '<span class="badge" style="background:rgba(184,134,11,0.15);color:var(--gold);font-size:10px">Draft</span>';
+      const viewLabel = r.status === 'final' ? 'View' : 'Edit Draft';
+
       return `<div class="report-card" id="rcard-${r.id}">
         <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
           <input type="checkbox" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:var(--gold)"
             onchange="toggleReportSelect('${r.id}', this)"
             ${selectedReportIds.has(r.id) ? 'checked' : ''}>
           <div class="report-info">
-            <h4>${esc(r.clientName)} — ${esc(r.typeName)}</h4>
+            <h4>${esc(r.clientName)} — ${esc(r.typeName)} ${statusBadge}</h4>
             <p>
               <span class="badge ${typeBadge}">${esc(r.typeName)}</span>
               &nbsp; ${new Date(r.createdAt).toLocaleDateString()} &nbsp;
@@ -1275,7 +1371,7 @@ function refreshUI() {
           </div>
         </div>
         <div class="report-actions">
-          <button class="btn btn-sm" onclick="viewReport('${r.id}')">View</button>
+          <button class="btn btn-sm" onclick="viewReport('${r.id}')">${viewLabel}</button>
           <button class="btn btn-sm" onclick="copyShareLink(state.reports.find(x=>x.id==='${r.id}'))">Share</button>
           <button class="btn btn-sm" onclick="downloadPdf('${r.id}', '${esc(r.clientName)}')">PDF</button>
           <button class="btn btn-sm btn-danger" onclick="deleteReport('${r.id}')">Delete</button>
@@ -1565,7 +1661,397 @@ async function loadSheetDates() {
   }
 }
 
-// ── GENERATE TAB SWITCHING ────────────────────────────────────────
+// ── DRAFT REPORT EDITOR ──────────────────────────────────────────
+let draftState = {
+  reportId: null,
+  reportMeta: null,
+  mode: 'view',        // 'view' | 'edit' | 'annotate'
+  currentHtml: null,
+  selectedSectionEl: null,
+  selectedSectionHtml: null,
+};
+
+async function openDraftEditor(reportId) {
+  const report = state.reports.find(r => r.id === reportId);
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+
+  // Load HTML
+  let html;
+  try {
+    const resp = await fetch(`/api/report-html?id=${reportId}`, {
+      headers: { 'X-Admin-Password': password }
+    });
+    if (!resp.ok) throw new Error('Could not load report');
+    html = await resp.text();
+  } catch (err) {
+    showToast('Error loading report: ' + err.message);
+    return;
+  }
+
+  draftState.reportId = reportId;
+  draftState.reportMeta = report;
+  draftState.currentHtml = html;
+  draftState.mode = 'view';
+
+  document.getElementById('draft-title').textContent = (report?.clientName || '') + ' — ' + (report?.typeName || 'Report');
+
+  const overlay = document.getElementById('draft-overlay');
+  overlay.style.display = 'flex';
+
+  loadHtmlIntoIframe(html);
+  setDraftMode('view');
+}
+
+function loadHtmlIntoIframe(html) {
+  const iframe = document.getElementById('draft-iframe');
+  // Inject editor bridge script into the HTML before loading
+  const bridgeScript = `
+    <script>
+    (function() {
+      let currentMode = 'view';
+
+      window.addEventListener('message', function(e) {
+        if (!e.data) return;
+        if (e.data.type === 'SET_MODE') {
+          currentMode = e.data.mode;
+          applyMode(currentMode);
+        }
+        if (e.data.type === 'APPLY_SECTION_REVISION') {
+          applySectionRevision(e.data.sectionId, e.data.html);
+        }
+        if (e.data.type === 'GET_HTML') {
+          window.parent.postMessage({ type: 'FULL_HTML', html: document.documentElement.outerHTML }, '*');
+        }
+      });
+
+      function applyMode(mode) {
+        // Remove all existing edit styles
+        document.querySelectorAll('[data-draft-section]').forEach(el => {
+          el.contentEditable = 'false';
+          el.style.outline = '';
+          el.style.cursor = '';
+          el.onclick = null;
+        });
+        clearHighlights();
+
+        if (mode === 'edit') {
+          document.querySelectorAll('[data-draft-section]').forEach(el => {
+            el.contentEditable = 'true';
+            el.style.outline = '2px dashed rgba(184,134,11,0.4)';
+            el.style.cursor = 'text';
+            el.style.minHeight = '20px';
+          });
+        } else if (mode === 'annotate') {
+          document.querySelectorAll('[data-draft-section]').forEach(el => {
+            el.style.cursor = 'pointer';
+            el.style.transition = 'background 0.15s';
+            el.onclick = function(ev) {
+              ev.stopPropagation();
+              selectSection(el);
+            };
+            el.onmouseenter = function() {
+              if (!el.dataset.selected) el.style.background = 'rgba(184,134,11,0.06)';
+            };
+            el.onmouseleave = function() {
+              if (!el.dataset.selected) el.style.background = '';
+            };
+          });
+        }
+      }
+
+      function clearHighlights() {
+        document.querySelectorAll('[data-draft-section]').forEach(el => {
+          el.style.background = '';
+          el.style.outline = '';
+          delete el.dataset.selected;
+        });
+      }
+
+      function selectSection(el) {
+        clearHighlights();
+        el.style.background = 'rgba(184,134,11,0.12)';
+        el.style.outline = '2px solid rgba(184,134,11,0.6)';
+        el.dataset.selected = '1';
+        const rect = el.getBoundingClientRect();
+        window.parent.postMessage({
+          type: 'SECTION_SELECTED',
+          sectionId: el.dataset.draftSection,
+          sectionHtml: el.outerHTML,
+          sectionText: el.innerText.slice(0, 120),
+          rect: { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width }
+        }, '*');
+      }
+
+      function applySectionRevision(sectionId, newHtml) {
+        const el = document.querySelector('[data-draft-section="' + sectionId + '"]');
+        if (!el) return;
+        const temp = document.createElement('div');
+        temp.innerHTML = newHtml;
+        const newEl = temp.firstElementChild;
+        if (newEl) {
+          newEl.dataset.draftSection = sectionId;
+          newEl.style.cssText = el.style.cssText;
+          el.parentNode.replaceChild(newEl, el);
+          // Flash to confirm
+          newEl.style.background = 'rgba(30,132,73,0.15)';
+          setTimeout(() => { newEl.style.background = ''; }, 1500);
+          applyMode(currentMode);
+        }
+      }
+
+      // Inject section markers on load
+      function markSections() {
+        const selectors = [
+          '.sec', '.kw-section', '.report-section', '.card',
+          'h2', 'h3', 'p', 'li', 'td', '.st', '.sub-row'
+        ];
+        let id = 0;
+        // Mark block-level sections first (coarser granularity for annotation)
+        const blockSelectors = ['.sec', '.kw-section', '.report-section', '.card', '.kw-body'];
+        blockSelectors.forEach(sel => {
+          document.querySelectorAll(sel).forEach(el => {
+            if (!el.dataset.draftSection && el.innerText.trim().length > 20) {
+              el.dataset.draftSection = 'sec-' + (++id);
+            }
+          });
+        });
+        // Also mark standalone paragraphs not inside a marked section
+        document.querySelectorAll('p, li').forEach(el => {
+          let parent = el.parentElement;
+          let inMarked = false;
+          while (parent) {
+            if (parent.dataset && parent.dataset.draftSection) { inMarked = true; break; }
+            parent = parent.parentElement;
+          }
+          if (!inMarked && el.innerText.trim().length > 20) {
+            el.dataset.draftSection = 'sec-' + (++id);
+          }
+        });
+      }
+
+      document.addEventListener('DOMContentLoaded', markSections);
+      if (document.readyState !== 'loading') markSections();
+    })();
+    <\/script>
+  `;
+
+  // Insert bridge before </body>
+  const injectedHtml = html.includes('</body>')
+    ? html.replace('</body>', bridgeScript + '</body>')
+    : html + bridgeScript;
+
+  const blob = new Blob([injectedHtml], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const iframe = document.getElementById('draft-iframe');
+  iframe.src = url;
+  iframe.onload = () => {
+    URL.revokeObjectURL(url);
+    // Apply current mode after load
+    iframe.contentWindow.postMessage({ type: 'SET_MODE', mode: draftState.mode }, '*');
+  };
+}
+
+function setDraftMode(mode) {
+  draftState.mode = mode;
+  const modes = ['view', 'edit', 'annotate'];
+  modes.forEach(m => {
+    const btn = document.getElementById('mode-btn-' + m);
+    if (btn) {
+      btn.style.background = m === mode ? 'var(--gold)' : 'var(--surface-2)';
+      btn.style.color = m === mode ? '#000' : 'var(--text-muted)';
+    }
+  });
+
+  const hints = { view: 'Read-only view', edit: 'Click any section to edit text freely', annotate: 'Click any section to request a change from Claude' };
+  document.getElementById('draft-mode-hint').textContent = hints[mode] || '';
+  document.getElementById('annotate-bar').style.display = mode === 'annotate' ? 'block' : 'none';
+
+  if (mode !== 'annotate') closeAnnotationPopup();
+
+  const iframe = document.getElementById('draft-iframe');
+  if (iframe.contentWindow) {
+    iframe.contentWindow.postMessage({ type: 'SET_MODE', mode }, '*');
+  }
+}
+
+function closeDraftEditor() {
+  document.getElementById('draft-overlay').style.display = 'none';
+  closeAnnotationPopup();
+  draftState = { reportId: null, reportMeta: null, mode: 'view', currentHtml: null, selectedSectionEl: null, selectedSectionHtml: null };
+}
+
+// Listen for messages from the iframe
+window.addEventListener('message', function(e) {
+  if (!e.data) return;
+
+  if (e.data.type === 'SECTION_SELECTED') {
+    showAnnotationPopup(e.data);
+  }
+
+  if (e.data.type === 'FULL_HTML') {
+    handleFinaliseHtml(e.data.html);
+  }
+});
+
+// ── ANNOTATION POPUP ─────────────────────────────────────────────
+function showAnnotationPopup(data) {
+  draftState.selectedSectionHtml = data.sectionHtml;
+  draftState.selectedSectionId = data.sectionId;
+
+  document.getElementById('annotation-section-preview').textContent = data.sectionText + (data.sectionText.length >= 120 ? '…' : '');
+  document.getElementById('annotation-input').value = '';
+  document.getElementById('annotation-status').style.display = 'none';
+  document.getElementById('annotation-submit-btn').disabled = false;
+
+  const popup = document.getElementById('annotation-popup');
+  popup.style.display = 'block';
+
+  // Position popup near the selected section
+  const iframe = document.getElementById('draft-iframe');
+  const iframeRect = iframe.getBoundingClientRect();
+  const rect = data.rect;
+
+  let top = iframeRect.top + rect.bottom + 8;
+  let left = iframeRect.left + rect.left;
+
+  // Keep within viewport
+  const popupW = 340, popupH = 260;
+  if (left + popupW > window.innerWidth - 16) left = window.innerWidth - popupW - 16;
+  if (top + popupH > window.innerHeight - 16) top = iframeRect.top + rect.top - popupH - 8;
+  if (top < 60) top = 60;
+
+  popup.style.top = top + 'px';
+  popup.style.left = left + 'px';
+
+  setTimeout(() => document.getElementById('annotation-input').focus(), 50);
+}
+
+function closeAnnotationPopup() {
+  document.getElementById('annotation-popup').style.display = 'none';
+  draftState.selectedSectionHtml = null;
+  draftState.selectedSectionId = null;
+}
+
+async function submitAnnotation() {
+  const annotation = document.getElementById('annotation-input').value.trim();
+  if (!annotation) { showToast('Please enter an annotation'); return; }
+
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+  const btn = document.getElementById('annotation-submit-btn');
+  const status = document.getElementById('annotation-status');
+
+  btn.disabled = true;
+  status.style.display = 'block';
+  status.textContent = 'Claude is rewriting this section...';
+
+  try {
+    const resp = await fetch('/api/revise', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+      body: JSON.stringify({
+        sectionHtml: draftState.selectedSectionHtml,
+        annotation,
+        reportContext: draftState.reportMeta?.clientName + ' — ' + draftState.reportMeta?.typeName
+      })
+    });
+
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Revision failed');
+
+    // Apply the revised HTML to the iframe section
+    const iframe = document.getElementById('draft-iframe');
+    iframe.contentWindow.postMessage({
+      type: 'APPLY_SECTION_REVISION',
+      sectionId: draftState.selectedSectionId,
+      html: data.revised
+    }, '*');
+
+    status.textContent = '✓ Applied. Click another section or continue editing.';
+    btn.disabled = false;
+
+    setTimeout(() => closeAnnotationPopup(), 1500);
+
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+    btn.disabled = false;
+  }
+}
+
+// ── FINALISE ─────────────────────────────────────────────────────
+async function finaliseDraftReport() {
+  const iframe = document.getElementById('draft-iframe');
+
+  // First save any in-progress edit mode content
+  setDraftMode('view');
+
+  document.getElementById('finalise-progress').style.display = 'block';
+  document.getElementById('finalise-bar').style.width = '30%';
+  document.getElementById('finalise-status').textContent = 'Collecting report content...';
+  document.getElementById('finalise-btn').disabled = true;
+
+  // Request full HTML from iframe
+  iframe.contentWindow.postMessage({ type: 'GET_HTML' }, '*');
+}
+
+async function handleFinaliseHtml(html) {
+  const password = localStorage.getItem('citadel_password') || 'citadel2025';
+
+  document.getElementById('finalise-bar').style.width = '60%';
+  document.getElementById('finalise-status').textContent = 'Saving final report...';
+
+  // Strip the bridge script before saving
+  const cleanHtml = html.replace(/<script[\s\S]*?<\/script>/gi, match => {
+    if (match.includes('SET_MODE') || match.includes('draftSection')) return '';
+    return match;
+  }).replace(/data-draft-section="[^"]*"/g, '')
+    .replace(/style="[^"]*outline[^"]*"/g, '')
+    .replace(/contenteditable="[^"]*"/g, '');
+
+  try {
+    const resp = await fetch('/api/finalise', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+      body: JSON.stringify({ reportId: draftState.reportId, html: cleanHtml })
+    });
+
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Finalise failed');
+
+    document.getElementById('finalise-bar').style.width = '100%';
+    document.getElementById('finalise-status').textContent = 'Report finalised ✓';
+
+    // Update local state
+    if (data.report) {
+      const idx = state.reports.findIndex(r => r.id === draftState.reportId);
+      if (idx >= 0) state.reports[idx] = data.report;
+      saveState();
+      refreshUI();
+    }
+
+    setTimeout(() => {
+      closeDraftEditor();
+      showToast('Report finalised and saved');
+      document.getElementById('finalise-progress').style.display = 'none';
+      document.getElementById('finalise-btn').disabled = false;
+    }, 1200);
+
+  } catch (err) {
+    document.getElementById('finalise-status').textContent = 'Error: ' + err.message;
+    document.getElementById('finalise-btn').disabled = false;
+  }
+}
+
+// Override viewReport to open draft editor for draft reports, direct view for final
+async function viewReport(reportId) {
+  const report = state.reports.find(r => r.id === reportId);
+  // Open draft editor for all reports (allows editing even after finalisation)
+  openDraftEditor(reportId);
+}
+
+function dedupeById(arr) {
+  const seen = new Set();
+  return arr.filter(x => { if (!x.id || seen.has(x.id)) return false; seen.add(x.id); return true; });
+}
 function switchGenTab(tab) {
   const isStandard = tab === 'standard';
   document.getElementById('gen-form-standard').style.display = isStandard ? 'block' : 'none';
