@@ -90,46 +90,83 @@ async function fetchArchiveTab(sheetUrl) {
   if (!m) return null;
   const id = m[1];
 
-  // Try multiple gid values — SERP_Archive is usually gid 1 or 2
-  const gids = ["1", "2", "3", "4", "5", "0"];
-  const fmts = [
-    gid => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`,
-    gid => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`,
+  // Step 1: try to get sheet metadata via the feeds API to find SERP_Archive gid
+  try {
+    const feedUrl = `https://spreadsheets.google.com/feeds/worksheets/${id}/public/basic?alt=json`;
+    const feedResp = await fetch(feedUrl, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+    if (feedResp.ok) {
+      const feedData = await feedResp.json();
+      const entries = feedData?.feed?.entry || [];
+      for (const entry of entries) {
+        const title = (entry?.title?.$t || "").toLowerCase();
+        // Look for SERP_Archive tab
+        if (title.includes("archive")) {
+          // Extract gid from the self link
+          const selfLink = entry?.link?.find(l => l.rel === "self")?.href || "";
+          const gidMatch = selfLink.match(/\/(\d+)$/);
+          if (gidMatch) {
+            const gid = gidMatch[1];
+            const csv = await fetchCsvByGid(id, gid);
+            if (csv) return csv;
+          }
+        }
+      }
+      // If no archive tab found via name, try all tabs and check headers
+      for (const entry of entries) {
+        const selfLink = entry?.link?.find(l => l.rel === "self")?.href || "";
+        const gidMatch = selfLink.match(/\/(\d+)$/);
+        if (!gidMatch) continue;
+        const gid = gidMatch[1];
+        const csv = await fetchCsvByGid(id, gid);
+        if (!csv) continue;
+        const firstLine = csv.split("\n")[0].toLowerCase();
+        if (firstLine.includes("snapshot") || (firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword") && csv.split("\n").length > 5)) {
+          return csv;
+        }
+      }
+    }
+  } catch {}
+
+  // Step 2: try gids 0–20 directly (brute force)
+  const candidates = []; // {csv, hasSnapshot, hasRankUrlKw, rowCount}
+  for (let gid = 0; gid <= 20; gid++) {
+    const csv = await fetchCsvByGid(id, String(gid));
+    if (!csv) continue;
+    const firstLine = csv.split("\n")[0].toLowerCase();
+    const rowCount = csv.split("\n").length;
+    const hasSnapshot = firstLine.includes("snapshot");
+    const hasRankUrlKw = firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword");
+    if (hasSnapshot) return csv; // best match — return immediately
+    if (hasRankUrlKw && rowCount > 3) candidates.push({ csv, rowCount });
+  }
+
+  // Step 3: return the candidate with the most rows (most likely the archive)
+  if (candidates.length) {
+    candidates.sort((a, b) => b.rowCount - a.rowCount);
+    return candidates[0].csv;
+  }
+
+  return null;
+}
+
+async function fetchCsvByGid(sheetId, gid) {
+  const urls = [
+    `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
   ];
-
-  // First try to find a tab named SERP_Archive by checking each gid
-  for (const gid of gids) {
-    for (const fn of fmts) {
-      try {
-        const r = await fetch(fn(gid), { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
-        if (!r.ok) continue;
-        const csv = await r.text();
-        if (!csv || csv.length < 50 || csv.includes("<!DOCTYPE")) continue;
-        const firstLine = csv.split("\n")[0].toLowerCase();
-        // Check if this looks like SERP_Archive (has "snapshot date" column)
-        if (firstLine.includes("snapshot date") || firstLine.includes("snapshot_date")) {
-          return csv;
-        }
-      } catch {}
-    }
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+      if (!r.ok) continue;
+      const csv = await r.text();
+      if (!csv || csv.length < 30) continue;
+      if (csv.includes("<!DOCTYPE") || csv.includes("<html")) continue;
+      // Must have at least a header row with some content
+      const firstLine = csv.split("\n")[0];
+      if (firstLine.split(",").length < 3) continue;
+      return csv;
+    } catch {}
   }
-
-  // Fallback: return any tab that has the right columns
-  for (const gid of gids) {
-    for (const fn of fmts) {
-      try {
-        const r = await fetch(fn(gid), { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
-        if (!r.ok) continue;
-        const csv = await r.text();
-        if (!csv || csv.length < 50 || csv.includes("<!DOCTYPE")) continue;
-        const firstLine = csv.split("\n")[0].toLowerCase();
-        if (firstLine.includes("rank") && firstLine.includes("url") && firstLine.includes("keyword")) {
-          return csv;
-        }
-      } catch {}
-    }
-  }
-
   return null;
 }
 
