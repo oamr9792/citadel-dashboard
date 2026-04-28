@@ -219,10 +219,33 @@ function parseCSVLine(line) {
 }
 
 // ── Extract two snapshots from the archive ────────────────────────────────────
+
+// Parse a raw date string to YYYY-MM-DD without timezone conversion
+function rawToDateStr(raw) {
+  if (!raw) return null;
+  raw = raw.trim();
+  // Try ISO format first: 2026-03-30 or 2026-03-30T06:00:00
+  let m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  // Try M/D/YYYY or MM/DD/YYYY (Google Sheets US locale)
+  m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+  // Try D/M/YYYY (UK locale)
+  m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  // Fallback to Date parse but use local date parts
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) {
+    // Use UTC date parts to avoid timezone shift
+    return d.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
 function extractSnapshots(csv, dateA, dateB, kwFilter) {
   const { rows } = parseCSV(csv);
 
-  // Find date columns — could be "snapshot date", "fetched at", etc.
+  // Find column keys
   const sampleRow = rows[0] || {};
   const dateKey = Object.keys(sampleRow).find(k =>
     k.includes("snapshot") || k.includes("fetched")
@@ -238,24 +261,23 @@ function extractSnapshots(csv, dateA, dateB, kwFilter) {
   const dispKey = Object.keys(sampleRow).find(k => k.includes("display")) || "display url";
   const descKey = Object.keys(sampleRow).find(k => k.includes("meta") || k.includes("description") || k.includes("snippet")) || "meta description";
 
-  // Collect all available dates
-  const allDates = new Map(); // dateStr -> timestamp
+  // Collect all available date strings (YYYY-MM-DD) from the archive
+  const allDates = new Set();
   rows.forEach(r => {
-    const raw = r[dateKey] || "";
-    const d = new Date(raw);
-    if (!isNaN(d.getTime())) {
-      const ds = d.toISOString().slice(0, 10);
-      allDates.set(ds, Math.max(allDates.get(ds) || 0, d.getTime()));
-    }
+    const ds = rawToDateStr(r[dateKey] || "");
+    if (ds) allDates.add(ds);
   });
 
-  // Find closest date to requested dates
+  // Find closest available date to the requested date
   const findClosest = (target) => {
-    const td = new Date(target);
-    if (isNaN(td.getTime())) return null;
-    const targetTs = td.getTime();
+    if (!target) return null;
+    // Exact match first
+    if (allDates.has(target)) return target;
+    // Find nearest
+    const targetTs = new Date(target).getTime();
+    if (isNaN(targetTs)) return null;
     let closest = null, closestDiff = Infinity;
-    allDates.forEach((ts, ds) => {
+    allDates.forEach(ds => {
       const diff = Math.abs(new Date(ds).getTime() - targetTs);
       if (diff < closestDiff) { closestDiff = diff; closest = ds; }
     });
@@ -265,18 +287,10 @@ function extractSnapshots(csv, dateA, dateB, kwFilter) {
   const dateAActual = findClosest(dateA);
   const dateBActual = findClosest(dateB);
 
-  // Filter rows to the two dates
-  const isDate = (row, target) => {
-    const raw = row[dateKey] || "";
-    const d = new Date(raw);
-    if (isNaN(d.getTime())) return false;
-    return d.toISOString().slice(0, 10) === target;
-  };
-
+  // Filter rows by date using the same timezone-safe parser
   const filterRows = (dateStr) => {
     if (!dateStr) return [];
-    let filtered = rows.filter(r => isDate(r, dateStr));
-    // Apply keyword filter if provided
+    let filtered = rows.filter(r => rawToDateStr(r[dateKey] || "") === dateStr);
     if (kwFilter.length) {
       filtered = filtered.filter(r =>
         kwFilter.some(kw => (r[kwKey] || "").toLowerCase().includes(kw))
