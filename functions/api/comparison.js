@@ -58,6 +58,18 @@ CRITICAL: Output ONLY complete HTML. No markdown. No commentary.`;
     html = html.trim();
     if (html.startsWith("```")) html = html.replace(/^```(?:html)?\n?/, "").replace(/\n?```$/, "");
 
+    // DEBUG: include sample of what we actually parsed — helps diagnose sentiment/owned issues
+    const debugInfo = {
+      firstDate,
+      lastDate,
+      totalRows: (() => { const { rows } = parseCSV(archiveData); return rows.length; })(),
+      headers: (() => { const { headers } = parseCSV(archiveData); return headers; })(),
+      sampleRow: (() => { const { rows } = parseCSV(archiveData); return rows[0] || {}; })(),
+      foundKeywords,
+      snapshotACounts: foundKeywords.map(kw => ({ kw, count: snapshotA.filter(r => r.keyword === kw).length, negCount: snapshotA.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length, ownedCount: snapshotA.filter(r => r.keyword === kw && r.owned === '★').length })),
+      snapshotBCounts: foundKeywords.map(kw => ({ kw, count: snapshotB.filter(r => r.keyword === kw).length, negCount: snapshotB.filter(r => r.keyword === kw && r.sentiment.toLowerCase() === 'negative').length, ownedCount: snapshotB.filter(r => r.keyword === kw && r.owned === '★').length })),
+    };
+
     const shareToken = genTok();
     const reportId = `r_${Date.now()}`;
     const meta = {
@@ -84,7 +96,7 @@ CRITICAL: Output ONLY complete HTML. No markdown. No commentary.`;
     idx.unshift(meta);
     await env.CITADEL_KV.put("reports-index", JSON.stringify(idx));
 
-    return json({ success: true, report: meta });
+    return json({ success: true, report: meta, debug: debugInfo });
 
   } catch (err) {
     return json({ error: `Comparison failed: ${err.message}` }, 500);
