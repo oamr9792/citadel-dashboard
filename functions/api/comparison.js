@@ -9,10 +9,12 @@ export async function onRequestPost(context) {
   let body;
   try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
 
-  const { clientId, clientName, sheetUrl, keywords, dateA, dateB } = body;
+  const { clientId, clientName, sheetUrl, keywords, dateA, dateB, topN } = body;
   if (!clientId || !clientName || !sheetUrl || !dateA || !dateB) {
     return json({ error: "Missing required fields: clientId, clientName, sheetUrl, dateA, dateB" }, 400);
   }
+
+  const resultLimit = Math.min(Math.max(parseInt(topN) || 20, 1), 30);
 
   if (!env.ANTHROPIC_API_KEY) return json({ error: "No API key" }, 400);
 
@@ -28,20 +30,21 @@ export async function onRequestPost(context) {
 
     // Parse the archive CSV into snapshot rows
     const { snapshotA, snapshotB, foundKeywords, dateAActual, dateBActual } =
-      extractSnapshots(archiveData, dateA, dateB, kwFilter);
+      extractSnapshots(archiveData, dateA, dateB, kwFilter, resultLimit);
 
     if (!snapshotA.length && !snapshotB.length) {
       return json({ error: `No data found for the selected dates. Check that ${dateA} and ${dateB} exist in the archive.` }, 400);
     }
 
     // Build prompt data
-    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords);
+    const dataPayload = buildComparisonPayload(snapshotA, snapshotB, dateAActual, dateBActual, foundKeywords, resultLimit);
 
     const systemPrompt = buildComparisonSystemPrompt();
     const userPrompt = `Client: ${clientName}
 Keywords analysed: ${foundKeywords.join(", ")}
 Date A (baseline): ${dateAActual || dateA}
 Date B (latest): ${dateBActual || dateB}
+Results compared: Top ${resultLimit} per keyword
 
 ${dataPayload}
 
@@ -242,7 +245,7 @@ function rawToDateStr(raw) {
   return null;
 }
 
-function extractSnapshots(csv, dateA, dateB, kwFilter) {
+function extractSnapshots(csv, dateA, dateB, kwFilter, resultLimit = 20) {
   const { rows } = parseCSV(csv);
 
   // Find column keys
@@ -306,7 +309,7 @@ function extractSnapshots(csv, dateA, dateB, kwFilter) {
       movement: r[movKey] || "",
       displayUrl: r[dispKey] || "",
       description: r[descKey] || "",
-    })).filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank);
+    })).filter(r => r.rank > 0).sort((a, b) => a.rank - b.rank).slice(0, resultLimit);
   };
 
   const snapshotA = filterRows(dateAActual);
@@ -321,7 +324,7 @@ function extractSnapshots(csv, dateA, dateB, kwFilter) {
 }
 
 // ── Build comparison data payload for Claude ──────────────────────────────────
-function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords) {
+function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords, resultLimit = 20) {
   const kwGroups = {};
   keywords.forEach(kw => {
     kwGroups[kw] = {
@@ -335,6 +338,7 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords) {
   keywords.forEach(kw => {
     const { a, b } = kwGroups[kw];
     out += `\n=== KEYWORD: ${kw} ===\n`;
+    out += `Comparing top ${resultLimit} results. Sentiment % uses ${resultLimit} as denominator for BOTH dates.\n`;
 
     // Build URL-level diff
     const urlsA = new Map(a.map(r => [r.url, r]));
@@ -367,13 +371,13 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords) {
       return rankSort;
     });
 
-    out += `\nSNAPSHOT A (${dateA}) — ${a.length} results:\n`;
-    a.slice(0, 30).forEach(r => {
+    out += `\nSNAPSHOT A (${dateA}) — ${a.length} results shown (top ${resultLimit}):\n`;
+    a.forEach(r => {
       out += `  #${r.rank} | ${r.sentiment || "unlabelled"} | ${r.owned ? "★" : " "} | ${r.title.slice(0, 60)} | ${r.url}\n`;
     });
 
-    out += `\nSNAPSHOT B (${dateB}) — ${b.length} results:\n`;
-    b.slice(0, 30).forEach(r => {
+    out += `\nSNAPSHOT B (${dateB}) — ${b.length} results shown (top ${resultLimit}):\n`;
+    b.forEach(r => {
       out += `  #${r.rank} | ${r.sentiment || "unlabelled"} | ${r.owned ? "★" : " "} | ${r.title.slice(0, 60)} | ${r.url}\n`;
     });
 
@@ -392,16 +396,19 @@ function buildComparisonPayload(snapshotA, snapshotB, dateA, dateB, keywords) {
       out += `  ${rankStr}${sentChange}${ownedChange} | ${d.title.slice(0, 50)} | ${d.url}\n`;
     });
 
-    // Sentiment summary
+    // Sentiment — use resultLimit as fixed denominator so percentages are comparable
     const countSent = (arr, val) => arr.filter(r => (r.sentiment || "").toLowerCase() === val.toLowerCase()).length;
-    out += `\nSENTIMENT SUMMARY:\n`;
-    out += `  Date A: Positive=${countSent(a,"Positive")} Negative=${countSent(a,"Negative")} Neutral=${countSent(a,"Neutral")} Unlabelled=${a.filter(r=>!r.sentiment).length}\n`;
-    out += `  Date B: Positive=${countSent(b,"Positive")} Negative=${countSent(b,"Negative")} Neutral=${countSent(b,"Neutral")} Unlabelled=${b.filter(r=>!r.sentiment).length}\n`;
+    const posA = countSent(a, "Positive"), negA = countSent(a, "Negative"), neuA = countSent(a, "Neutral"), unlA = a.filter(r => !r.sentiment).length;
+    const posB = countSent(b, "Positive"), negB = countSent(b, "Negative"), neuB = countSent(b, "Neutral"), unlB = b.filter(r => !r.sentiment).length;
 
-    // Owned summary
-    out += `\nOWNED CONTENT SUMMARY:\n`;
-    out += `  Date A: ${a.filter(r=>r.owned==="★").length} owned results in top ${a.length}\n`;
-    out += `  Date B: ${b.filter(r=>r.owned==="★").length} owned results in top ${b.length}\n`;
+    out += `\nSENTIMENT SUMMARY (denominator = ${resultLimit} for both dates):\n`;
+    out += `  Date A: Positive=${posA}/${resultLimit} (${Math.round(posA/resultLimit*100)}%) Negative=${negA}/${resultLimit} (${Math.round(negA/resultLimit*100)}%) Neutral=${neuA}/${resultLimit} (${Math.round(neuA/resultLimit*100)}%) Unlabelled=${unlA}\n`;
+    out += `  Date B: Positive=${posB}/${resultLimit} (${Math.round(posB/resultLimit*100)}%) Negative=${negB}/${resultLimit} (${Math.round(negB/resultLimit*100)}%) Neutral=${neuB}/${resultLimit} (${Math.round(neuB/resultLimit*100)}%) Unlabelled=${unlB}\n`;
+    out += `  Change: Positive ${posA>posB?'-':'+'+(posB-posA)} Negative ${negA>negB?'-':'+'+(negB-negA)} (positive = more negative results)\n`;
+
+    out += `\nOWNED CONTENT:\n`;
+    out += `  Date A: ${a.filter(r=>r.owned==="★").length} owned in top ${resultLimit}\n`;
+    out += `  Date B: ${b.filter(r=>r.owned==="★").length} owned in top ${resultLimit}\n`;
   });
 
   return out;
@@ -511,8 +518,11 @@ table.dt{width:100%;border-collapse:collapse}
 .kw-body{padding:24px}
 .comparison-row-new{background:rgba(30,132,73,.08)}
 .comparison-row-dropped{background:rgba(192,57,43,.06);opacity:.7}
-.bar-c{display:flex;height:24px;border-radius:6px;overflow:hidden;margin:8px 0}
-.bar-s{display:flex;align-items:center;justify-content:center;color:#fff;font-size:.75rem;font-weight:600}
+.bar-c{display:flex;height:28px;border-radius:6px;overflow:hidden;margin:6px 0;background:#e8e8e8}
+.bar-s{display:flex;align-items:center;justify-content:center;color:#fff;font-size:.72rem;font-weight:700;white-space:nowrap;overflow:hidden;min-width:0;transition:flex .3s}
+.bar-s.bar-pos{background:#1e8449}.bar-s.bar-neu{background:#7f8c8d}.bar-s.bar-neg{background:#c0392b}.bar-s.bar-unl{background:#ddd;color:#999}
+.bar-label-ext{display:inline-flex;align-items:center;gap:6px;font-size:.75rem;font-weight:600;margin-right:10px}
+.bar-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
 .ft{text-align:center;padding:32px 24px;border-top:3px solid var(--navy);margin-top:48px;color:var(--muted);font-size:.85rem}
 .conf{color:var(--red);font-weight:700;text-transform:uppercase;letter-spacing:2px;font-size:.8rem;margin-top:12px}
 @media(max-width:700px){.g2,.g3,.g4{grid-template-columns:1fr}.header{flex-direction:column;text-align:center;padding:24px}}`;
@@ -535,13 +545,19 @@ SEC 1 — Executive Summary: div.sec > h2.sec-title + div.card > p
 Summarise the overall picture: what improved, what declined, what changed in sentiment, owned content performance.
 
 SEC 2 — Overall Metrics (across all keywords combined): div.sec > h2.sec-title + div.g4 of div.st
-Show: Total results compared (n-bl) | Positive sentiment change Δ (n-gr or n-rd) | Negative sentiment change Δ (n-rd or n-gr) | Owned results change Δ (n-am)
+Show: Results compared per keyword (n-bl) | Positive sentiment change Δ in pp (n-gr or n-rd) | Negative sentiment change Δ in pp (n-rd or n-gr) | Owned results change Δ (n-am)
+All sentiment percentages use the fixed top-N as denominator for both dates — never use the raw count of labelled results.
 Each stat: <div class="st"><div class="n [COLOR]">[VALUE]</div><div class="l">[LABEL]</div></div>
 
 SEC 3 — Per Keyword sections: for EACH keyword, a div.kw-section with:
   - div.kw-header showing the keyword
   - div.kw-body containing:
-    a) Sentiment bar comparison: two rows of div.bar-c showing A and B distributions (green=Positive, muted=Neutral, red=Negative), labelled with span.date-badge date-a and date-b
+    a) Sentiment bar comparison: two rows showing Date A and Date B distributions. IMPORTANT — use this exact pattern for each bar:
+       - Each segment is a div.bar-s with a class (bar-pos/bar-neu/bar-neg/bar-unl) and flex value equal to the percentage (e.g. style="flex:28")
+       - Only show text inside a segment if it is 15% or wider — otherwise leave the segment empty
+       - Below each bar, show a single line of span.bar-label-ext items (one per category) showing colour dot + label + %
+       - Example: <div class="bar-c"><div class="bar-s bar-pos" style="flex:28"></div><div class="bar-s bar-neg" style="flex:17"></div><div class="bar-s bar-neu" style="flex:6"></div><div class="bar-s bar-unl" style="flex:49"></div></div>
+         then: <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px"><span class="bar-label-ext"><span class="bar-dot" style="background:#1e8449"></span>Positive 28%</span><span class="bar-label-ext"><span class="bar-dot" style="background:#c0392b"></span>Negative 17%</span><span class="bar-label-ext"><span class="bar-dot" style="background:#7f8c8d"></span>Neutral 6%</span><span class="bar-label-ext"><span class="bar-dot" style="background:#ddd;color:#999"></span>Unlabelled 49%</span></div>
     b) Full comparison table: table.dt with columns: Rank (Date B) | Change | Sentiment A→B | Owned | Title | URL
        - Rows with class pos-row for positive, neg-row for negative, own-row for owned, comparison-row-new for new entries, comparison-row-dropped for dropped results
        - Movement: span.mv-up for improved, span.mv-dn for declined, span.mv-st for unchanged, span.mv-nw for new, span.mv-dr for dropped
