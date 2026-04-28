@@ -43,7 +43,8 @@ export async function onRequestPost(context) {
   results.gidScan = [];
   for (let gid = 0; gid <= 10; gid++) {
     try {
-      const url = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`;
+      // Use export format — more reliable for specific gids than gviz/tq
+      const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&id=${id}&gid=${gid}`;
       const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
       const text = await r.text();
       const isHtml = text.includes("<!DOCTYPE") || text.includes("<html");
