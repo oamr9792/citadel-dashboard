@@ -1164,9 +1164,18 @@ async function generateReport() {
       setProgress(55, 'Step 3/4 — Generating Social Media Intelligence Report...');
       try {
         const tfDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
-        let socialPayload = { clientId, clientName: client.name, type: 'social', keywords: kw, sheetUrl, timeframeDays: tfDays };
+        let socialPayload = { clientId, clientName: client.name, keywords: kw, sheetUrl, timeframeDays: tfDays };
         if (xpozToken) socialPayload.xpozToken = xpozToken;
-        const socialResult = await callGenerate(password, socialPayload);
+        // Social reports go to /api/social — calls Xpoz directly without Claude content policy interference
+        const socialResp = await fetch('/api/social', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+          body: JSON.stringify(socialPayload),
+        });
+        const socialText = await socialResp.text();
+        let socialResult;
+        try { socialResult = JSON.parse(socialText); } catch { throw new Error('Social API returned non-JSON'); }
+        if (!socialResp.ok || socialResult.error) throw new Error(socialResult.error || 'Social report failed');
         if (socialResult.report) { reportIds.social = socialResult.report; state.reports.unshift(socialResult.report); }
       } catch (e) { console.warn('Social report failed:', e.message); }
 
@@ -1193,25 +1202,36 @@ async function generateReport() {
       }, 1200);
 
     } else {
-      let body = { clientId, clientName: client.name, type, keywords: kw, sheetUrl };
-
-      if (type === 'social' || type === 'executive') {
-        body.timeframeDays = parseInt(document.getElementById('gen-timeframe').value) || 30;
-        if (xpozToken) body.xpozToken = xpozToken;
-      }
-
-      setProgress(20, 'Fetching data & generating report (this takes 30-90 seconds)...');
-      const data = await callGenerate(password, body);
-
-      setProgress(100, 'Complete!');
+      if (type === 'social') {
+      const socialPayload = { clientId, clientName: client.name, keywords: kw, sheetUrl,
+        timeframeDays: parseInt(document.getElementById('gen-timeframe').value) || 30 };
+      if (xpozToken) socialPayload.xpozToken = xpozToken;
+      if (genBar) genBar.style.width = '30%';
+      if (genStatus) genStatus.textContent = 'Fetching social media data...';
+      const socialResp = await fetch('/api/social', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+        body: JSON.stringify(socialPayload),
+      });
+      const socialText = await socialResp.text();
+      let data;
+      try { data = JSON.parse(socialText); } catch { throw new Error('Social API returned non-JSON'); }
+      if (!socialResp.ok || data.error) throw new Error(data.error || `Server error ${socialResp.status}`);
+      if (genBar) genBar.style.width = '100%';
+      if (genStatus) genStatus.textContent = 'Complete!';
       if (data.report) { state.reports.unshift(data.report); saveState(); }
-
-      setTimeout(() => {
-        resetGenUI();
-        showToast(`${data.report.typeName} report generated for ${client.name}`);
-        refreshUI();
-        navigateTo('reports');
-      }, 1000);
+      setTimeout(() => { resetGenUI(); showToast('Social Media report generated for ' + client.name); refreshUI(); navigateTo('reports'); }, 1000);
+    } else {
+      // SERP, LLM — use /api/generate
+      const body = { clientId, clientName: client.name, type, keywords: kw, sheetUrl };
+      if (genBar) genBar.style.width = '20%';
+      if (genStatus) genStatus.textContent = 'Generating report (30-90 seconds)...';
+      const data = await callGenerate(password, body);
+      if (genBar) genBar.style.width = '100%';
+      if (genStatus) genStatus.textContent = 'Complete!';
+      if (data.report) { state.reports.unshift(data.report); saveState(); }
+      setTimeout(() => { resetGenUI(); showToast(`${data.report.typeName} report generated for ${client.name}`); refreshUI(); navigateTo('reports'); }, 1000);
+    }
     }
   } catch (err) {
     resetGenUI();
