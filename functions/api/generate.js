@@ -1,5 +1,7 @@
 // functions/api/generate.js — Reputation Citadel Report Generator
 // Shared CSS + HTML templates for consistent reports across all types
+// PATCHED: (1) fetchGoogleSheet now discovers real tab gids instead of assuming 0-3
+//          (2) Claude is forbidden from inventing data when the sheet fetch fails
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -19,7 +21,7 @@ export async function onRequestPost(context) {
     // ── Fetch data based on report type ──
     if ((type === "serp" || type === "executive") && sheetUrl) {
       const sd = await fetchGoogleSheet(sheetUrl);
-      dataPayload += sd ? `\n=== GOOGLE SHEET DATA ===\n${sd}\n` : "\n=== GOOGLE SHEET ===\nUnable to fetch.\n";
+      dataPayload += sd ? `\n=== GOOGLE SHEET DATA ===\n${sd}\n` : "\n=== GOOGLE SHEET ===\nUNABLE TO FETCH SHEET DATA. State this clearly in the report. Do not invent SERP results.\n";
     }
     if ((type === "llm" || type === "executive") && env.DATAFORSEO_LOGIN) {
       const ld = await fetchLLMResponses(kw, env.DATAFORSEO_LOGIN, env.DATAFORSEO_PASSWORD);
@@ -99,44 +101,80 @@ export async function onRequestPost(context) {
 // DATA FETCHERS
 // ═══════════════════════════════════════
 
+// PATCHED: real sheets do not use gids 0-3. This discovers the actual SERP/archive
+// tabs the same way comparison.js does, and refuses to ingest config/settings tabs.
 async function fetchGoogleSheet(sheetUrl) {
   const m = sheetUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if (!m) return null;
-  const id = m[1], tabs = {};
-  const fmts = [
-    g => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${g}`,
-    g => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${g}`,
-  ];
-  for (const gid of ["0", "1", "2", "3"]) {
-    for (const fn of fmts) {
+  const id = m[1];
+  const tabs = {};
+
+  async function fetchCsvByGid(gid) {
+    const urls = [
+      `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&id=${id}&gid=${gid}`,
+      `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${gid}`,
+    ];
+    for (const url of urls) {
       try {
-        const r = await fetch(fn(gid), { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+        const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
         if (!r.ok) continue;
         const csv = await r.text();
-        if (!csv || csv.length < 50 || csv.includes("<!DOCTYPE")) continue;
-        const fl = csv.split("\n")[0].toLowerCase();
-        let tn = `Tab_gid${gid}`;
-        if (fl.includes("rank") || fl.includes("snapshot") || fl.includes("keyword")) tn = `SERP_gid${gid}`;
-        else if (fl.includes("content") || fl.includes("live url")) tn = `Content_gid${gid}`;
-        const lines = csv.split("\n");
-        if (lines.length > 200) {
-          const hdr = lines[0], dateRows = {};
-          for (let i = 1; i < lines.length; i++) {
-            const d = lines[i].split(",")[0].replace(/"/g, "").trim();
-            if (d && d.match(/\d/)) { if (!dateRows[d]) dateRows[d] = []; dateRows[d].push(lines[i]); }
-          }
-          const sorted = Object.keys(dateRows).sort((a, b) => new Date(b) - new Date(a));
-          const latest = sorted[0], lm = new Date(latest).getMonth(), ly = new Date(latest).getFullYear();
-          let prev = null;
-          for (const d of sorted) { const dt = new Date(d); if (dt.getMonth() !== lm || dt.getFullYear() !== ly) { prev = d; break; } }
-          const filt = [hdr, ...(dateRows[latest] || [])];
-          if (prev && dateRows[prev]) filt.push(...dateRows[prev]);
-          tabs[tn] = filt.join("\n");
-        } else { tabs[tn] = csv; }
-        break;
+        if (!csv || csv.length < 50) continue;
+        if (csv.includes("<!DOCTYPE") || csv.includes("<html")) continue;
+        if (csv.split("\n")[0].split(",").length < 3) continue;
+        return csv;
       } catch {}
     }
+    return null;
   }
+
+  function classify(csv) {
+    const fl = csv.split("\n")[0].toLowerCase();
+    if (fl.includes("setting") || fl.includes("dfs_email") || fl.includes("dfs_password")) return "skip"; // config tab — never send to Claude
+    if (fl.includes("snapshot") || (fl.includes("rank") && fl.includes("keyword"))) return "serp";
+    if (fl.includes("content") || fl.includes("live url")) return "content";
+    return "other";
+  }
+
+  // Known archive gid first (matches comparison.js), then a wide scan —
+  // real sheets use arbitrary gids, not 0-3.
+  const candidateGids = ["697017722"];
+  for (let g = 0; g <= 30; g++) candidateGids.push(String(g));
+
+  for (const gid of candidateGids) {
+    if (Object.keys(tabs).length >= 3) break; // enough data, stop burning subrequests
+    const csv = await fetchCsvByGid(gid);
+    if (!csv) continue;
+    const kind = classify(csv);
+    if (kind === "skip") continue;
+    if (kind === "other") continue; // unknown tabs are junk for SERP reports
+
+    const tn = kind === "serp" ? `SERP_gid${gid}` : `Content_gid${gid}`;
+
+    // Keep only the latest snapshot date + the most recent prior-month date
+    const lines = csv.split("\n");
+    if (lines.length > 200) {
+      const hdr = lines[0], dateRows = {};
+      for (let i = 1; i < lines.length; i++) {
+        const d = lines[i].split(",")[0].replace(/"/g, "").trim();
+        if (d && d.match(/\d/)) { if (!dateRows[d]) dateRows[d] = []; dateRows[d].push(lines[i]); }
+      }
+      const sorted = Object.keys(dateRows).sort((a, b) => new Date(b) - new Date(a));
+      if (sorted.length) {
+        const latest = sorted[0], lm = new Date(latest).getMonth(), ly = new Date(latest).getFullYear();
+        let prev = null;
+        for (const d of sorted) { const dt = new Date(d); if (dt.getMonth() !== lm || dt.getFullYear() !== ly) { prev = d; break; } }
+        const filt = [hdr, ...(dateRows[latest] || [])];
+        if (prev && dateRows[prev]) filt.push(...dateRows[prev]);
+        tabs[tn] = filt.join("\n");
+      } else {
+        tabs[tn] = csv;
+      }
+    } else {
+      tabs[tn] = csv;
+    }
+  }
+
   if (!Object.keys(tabs).length) return null;
   let out = "";
   for (const [n, c] of Object.entries(tabs)) out += `\n--- ${n} (${c.split("\n").length} rows) ---\n${c}\n`;
@@ -241,16 +279,11 @@ async function callClaudeWithWebSearch(apiKey, system, userContent) {
 
     if (data.stop_reason === "end_turn") break;
 
-    // If Claude used web_search, the API handles it server-side and continues
-    // We just need to pass the full content back for multi-turn
     messages.push({ role: "assistant", content: data.content });
 
-    // Check if there are tool_use blocks that need results
     const toolUses = data.content.filter(b => b.type === "tool_use");
     if (toolUses.length === 0) break;
 
-    // For server-side tools like web_search, the API handles execution
-    // But we still need to continue the conversation
     const toolResults = toolUses.map(t => ({
       type: "tool_result",
       tool_use_id: t.id,
@@ -307,18 +340,15 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
   const startDate = new Date(Date.now() - timeframeDays * 86400000).toISOString().split("T")[0];
 
   // Build search queries from ALL comma-separated keywords
-  // "Murry Gunty, Black Bear Sports Group, BBSG" → 3 separate queries
   const queryTerms = keywords.split(",").map(k => k.trim()).filter(Boolean);
   const xpozQueries = queryTerms.map(term => {
     const words = term.split(/\s+/).filter(Boolean);
     return words.length > 1 ? words.join(" AND ") : term;
   });
 
-  const data = { twitter: [], reddit: [], instagram: [], meta: { queries: xpozQueries, startDate, endDate, timeframeDays } };
+  const data = { twitter: [], reddit: [], instagram: [], meta: { queries: xpozQueries, startDate, endDate, timeframeDays, errors: [] } };
   const seenTw = new Set(), seenRd = new Set(), seenIg = new Set();
 
-  // Search each query term across all platforms, deduplicate by ID
-  // Cap at 5 keyword phrases to stay within Cloudflare timeout
   const queries = xpozQueries.slice(0, 5);
 
   for (const q of queries) {
@@ -329,10 +359,11 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
         fields: ["id", "text", "authorUsername", "createdAtDate", "likeCount", "retweetCount", "replyCount", "impressionCount"],
         userPrompt: `Find tweets about "${q}" for reputation monitoring of ${clientName}`
       }});
+      if (tw && tw.error) data.meta.errors.push(`Twitter "${q}": ${tw.error}`);
       for (const p of parseXpozCompact(extractMcpText(tw)).results) {
         if (p.id && !seenTw.has(p.id)) { seenTw.add(p.id); data.twitter.push(p); }
       }
-    } catch (e) { /* skip failed query */ }
+    } catch (e) { data.meta.errors.push(`Twitter "${q}": ${e.message}`); }
 
     // Reddit
     try {
@@ -341,10 +372,11 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
         fields: ["id", "title", "selftext", "authorUsername", "subredditName", "score", "commentsCount", "permalink", "createdAtDate"],
         userPrompt: `Find Reddit posts about "${q}" for reputation monitoring of ${clientName}`
       }});
+      if (rd && rd.error) data.meta.errors.push(`Reddit "${q}": ${rd.error}`);
       for (const p of parseXpozCompact(extractMcpText(rd)).results) {
         if (p.id && !seenRd.has(p.id)) { seenRd.add(p.id); data.reddit.push(p); }
       }
-    } catch (e) { /* skip failed query */ }
+    } catch (e) { data.meta.errors.push(`Reddit "${q}": ${e.message}`); }
 
     // Instagram
     try {
@@ -353,10 +385,11 @@ async function fetchXpozDirect(keywords, clientName, xpozToken, timeframeDays = 
         fields: ["id", "caption", "username", "createdAtDate", "likeCount", "commentCount", "codeUrl"],
         userPrompt: `Find Instagram posts about "${q}" for reputation monitoring of ${clientName}`
       }});
+      if (ig && ig.error) data.meta.errors.push(`Instagram "${q}": ${ig.error}`);
       for (const p of parseXpozCompact(extractMcpText(ig)).results) {
         if (p.id && !seenIg.has(p.id)) { seenIg.add(p.id); data.instagram.push(p); }
       }
-    } catch (e) { /* skip failed query */ }
+    } catch (e) { data.meta.errors.push(`Instagram "${q}": ${e.message}`); }
   }
 
   // Add URLs to each post
@@ -404,8 +437,6 @@ function parseXpozCompact(text) {
 // Pre-compute social analysis deterministically (no LLM variance)
 function precomputeSocialAnalysis(data, clientName, keywords) {
   const kwPhrases = keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
-  // A post is relevant if it matches ANY keyword phrase
-  // Each phrase: all words in the phrase must appear in the text
   function isRelevant(text) {
     if (!text) return false;
     const lower = text.toLowerCase();
@@ -439,13 +470,11 @@ function precomputeSocialAnalysis(data, clientName, keywords) {
   const allPosts = [...filtered.twitter, ...filtered.reddit, ...filtered.instagram];
   allPosts.sort((a, b) => b.engagement - a.engagement);
   const totalEng = allPosts.reduce((s, p) => s + p.engagement, 0);
-  // Timeline by month
   const timeline = {};
   for (const p of allPosts) {
     const m = (p.createdAtDate || "").substring(0, 7);
     if (m) { if (!timeline[m]) timeline[m] = []; timeline[m].push(p); }
   }
-  // Key voices
   const voices = {};
   for (const p of allPosts) {
     const a = p.authorUsername || p.username || "unknown";
@@ -585,9 +614,9 @@ ${data}
 
 CRITICAL RULES:
 - Output ONLY complete HTML. No markdown fences. No commentary before or after.
-- Fill ALL sections with real data analysis. No placeholders or "data unavailable".
-- Tables must have actual data rows from the provided data.
-- 15,000-40,000 characters minimum for a thorough report.
+- Use ONLY the data provided above. NEVER invent, fabricate, or guess SERP results, URLs, titles, post excerpts, numbers, or metrics under any circumstances.
+- If data for a section is missing, empty, failed to fetch, or is clearly not the right kind of data (e.g. configuration/settings rows instead of SERP rows), state this prominently in that section in plain language (e.g. "SERP data could not be retrieved from the tracking sheet for this period") and leave its tables empty. An honest gap is acceptable; invented data is never acceptable.
+- Tables must contain only rows that appear in the provided data.
 - PERIOD: If one date snapshot provided = baseline report (label as that date only). If two date snapshots from different months = monthly comparison report.
 - Reports are monthly, produced on the 1st of each month.`;
 }
@@ -607,6 +636,7 @@ function buildSerpPrompt(css, hdr) {
 
 Parse the SERP CSV data. Compute ownership %, sentiment distribution, negative exposure, movement.
 TONE: Client-facing, professional. Use "Mr./Ms. [Last Name]". Negatives are "exposure areas". Encouraging but honest.
+DATA INTEGRITY: Use only the rows provided. If no SERP rows were provided, say so clearly in the Executive Summary and leave the tables empty. Never invent results.
 
 USE THIS EXACT HTML STRUCTURE — same classes, same order, every time:
 
@@ -656,6 +686,8 @@ CRITICAL — KEY VOICES: The "KEY VOICES" section lists authors sorted by engage
 
 CRITICAL — TIMELINE: The "TIMELINE BY MONTH" section shows post counts per month. Use these to build the Timeline section.
 
+CRITICAL — NO FABRICATION: If counts are zero or the data section reports collection errors, state this plainly (including any error messages provided) and do not invent posts, authors, or engagement numbers.
+
 TIMEFRAME: The data covers a specific date range provided in the metadata. Reference this timeframe in the report header and executive summary (e.g., "Analysis Period: Feb 1 - Mar 1, 2026").
 
 Assess risk: Low / Medium / Elevated / High / Critical. Base this on the sentiment ratio, engagement levels, and nature of negative content.
@@ -703,6 +735,8 @@ Analyze how ChatGPT, Claude, Gemini, Perplexity represent the client. Classify s
 
 Risk Score factors: negative sentiment prevalence (30%), prominence of negative content (25%), dangerous fan-out queries (15%), negative source frequency (15%), cross-platform consistency of negatives (15%).
 
+DATA INTEGRITY: Analyze only the LLM responses provided in the data. If no LLM response data was provided or all queries errored, state this clearly and do not invent platform responses.
+
 TONE: Professional. "Mr./Ms. [Last Name]". Negatives = "exposure" or "narrative risk".
 
 USE THIS EXACT HTML STRUCTURE:
@@ -742,6 +776,7 @@ Output ONLY the completed HTML.`;
 function buildExecPrompt(css, hdr) {
   return `You are a senior ORM analyst for Reputation Citadel generating an Executive Summary Report.
 Synthesize SERP, social media, and LLM findings into a concise C-suite brief. TONE: Professional. "Mr./Ms. [Last Name]".
+DATA INTEGRITY: Summarise only the data provided. If a data source failed or returned nothing, say so plainly in that section (e.g. "SERP tracking data could not be retrieved this period"). Never invent results, posts, or metrics.
 
 USE THIS EXACT HTML STRUCTURE:
 
